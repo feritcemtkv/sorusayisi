@@ -340,7 +340,7 @@ const _supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function loadAll(){
   try{
-    const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).single();
+    const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).maybeSingle();
     if(error) throw error;
     const payload = (data && data.data) ? data.data : { students:[], entries:[] };
     state.students = payload.students || [];
@@ -357,7 +357,7 @@ async function loadAll(){
 }
 async function withLatestData(mutator){
   try{
-    const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).single();
+    const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).maybeSingle();
     if(error) throw error;
     const payload = (data && data.data) ? data.data : { students:[], entries:[] };
     const students = payload.students || [];
@@ -365,8 +365,7 @@ async function withLatestData(mutator){
     const ok = mutator(students, entries);
     if(ok === false) return false;
     const { error: err2 } = await _supabase.from('soru_takip')
-      .update({ data: { students, entries } })
-      .eq('id', 1);
+      .upsert({ id: 1, data: { students, entries } }, { onConflict: 'id' });
     if(err2) throw err2;
     state.students = students;
     state.entries = entries;
@@ -374,7 +373,8 @@ async function withLatestData(mutator){
     return true;
   } catch(e){
     console.error('Kaydedilemedi', e);
-    alert('Kaydedilemedi — internet bağlantını kontrol edip tekrar dene.');
+    const detail = (e && (e.message || e.details || e.hint || e.code)) ? `\n\nDetay: ${e.message||''} ${e.details||''} ${e.hint||''} ${e.code? '('+e.code+')':''}` : '';
+    alert('Kaydedilemedi — bir hata oluştu.' + detail);
     return false;
   }
 }
