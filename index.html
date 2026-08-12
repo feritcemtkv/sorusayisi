@@ -222,6 +222,12 @@ function getRemembered(){ try{ return localStorage.getItem(REMEMBER_KEY); } catc
 function setRemembered(id){ try{ localStorage.setItem(REMEMBER_KEY, id); } catch(e){} }
 function clearRemembered(){ try{ localStorage.removeItem(REMEMBER_KEY); } catch(e){} }
 function generatePassword(){ return String(Math.floor(1000 + Math.random()*9000)); }
+function suggestUsername(name){
+  const map = {'ç':'c','ğ':'g','ı':'i','ö':'o','ş':'s','ü':'u'};
+  let s = (name||'').toLowerCase().split('').map(ch=>map[ch]||ch).join('');
+  s = s.replace(/[^a-z0-9]+/g,'');
+  return s || 'ogrenci';
+}
 
 function getSubjects(student){
   if(!student) return [];
@@ -725,7 +731,7 @@ function renderTeacherList(){
       const badge = st.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[st.alan]}</span>`;
       const streak = calcStreak(st.id);
       html += `<div class="list-row" data-id="${st.id}">
-        <div><div class="name">${escapeHtml(st.name)} ${streak>=2?`<span class="streak" style="margin-left:6px;">${ICONS.flame}${streak}</span>`:''}</div><div class="meta">${badge} <span class="mono">@${escapeHtml(st.username||'—')}</span></div></div>
+        <div><div class="name">${escapeHtml(st.name)} ${streak>=2?`<span class="streak" style="margin-left:6px;">${ICONS.flame}${streak}</span>`:''}</div><div class="meta">${badge} ${st.username && st.password ? `<span class="mono">@${escapeHtml(st.username)} · ${escapeHtml(st.password)}</span>` : `<span style="color:var(--red);font-weight:700;">Giriş bilgisi eksik — düzenle</span>`}</div></div>
         <div class="right">
           <div class="figure"><div class="n">${sumForDate(st.id,todayStr())}</div><div class="l">Bugün</div></div>
           <div class="figure"><div class="n">${sumForRange(st.id,7)}</div><div class="l">Hafta</div></div>
@@ -823,10 +829,10 @@ function renderTeacherDetail(){
     body.innerHTML = `
       <div class="field">
         <label>Kullanıcı Adı</label>
-        <input type="text" id="f-new-user" value="${escapeHtml(student.username||'')}" autocomplete="off" autocapitalize="off">
+        <input type="text" id="f-new-user" value="${escapeHtml(student.username || suggestUsername(student.name))}" autocomplete="off" autocapitalize="off">
       </div>
       <div style="display:flex;gap:8px;">
-        <div style="flex:1;"><input type="text" id="f-new-pw" value="${escapeHtml(student.password||'')}" autocomplete="off"></div>
+        <div style="flex:1;"><input type="text" id="f-new-pw" value="${escapeHtml(student.password || generatePassword())}" autocomplete="off"></div>
         <button type="button" class="btn btn-outline" id="gen-new-pw" style="white-space:nowrap;">Otomatik</button>
       </div>
       <div id="cred-error" style="color:var(--red);font-size:13px;font-weight:600;min-height:16px;margin-top:6px;"></div>
