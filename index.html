@@ -217,8 +217,11 @@ const MONTHS = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','K
 const PALETTE = ['#C0392B','#2F6F4F','#C6941C','#68727C','#8B5E9B','#2E6B8F','#B0563E','#4E7D3B'];
 // Öğretmen PIN kodu — istersen bunu değiştir (sadece rakam/karakter olabilir)
 const TEACHER_PIN = '2026';
-// Sınıf şifresi — linki alan herkesin girmesi gereken genel şifre. Öğrencilerine sen söylersin.
-const APP_PASSWORD = 'soru123';
+const REMEMBER_KEY = 'soru_takip_student_id';
+function getRemembered(){ try{ return localStorage.getItem(REMEMBER_KEY); } catch(e){ return null; } }
+function setRemembered(id){ try{ localStorage.setItem(REMEMBER_KEY, id); } catch(e){} }
+function clearRemembered(){ try{ localStorage.removeItem(REMEMBER_KEY); } catch(e){} }
+function generatePassword(){ return String(Math.floor(1000 + Math.random()*9000)); }
 
 function getSubjects(student){
   if(!student) return [];
@@ -229,14 +232,14 @@ function getSubjects(student){
 /* ---------------- state ---------------- */
 const state = {
   loading:true,
-  unlocked:false,
   loadError:false,
   students:[],
   entries:[],
-  view:'home',
+  view:'login-select',
+  pendingStudentId:null,
   currentStudentId:null,
   teacherStudentId:null,
-  teacherReturnAdd:false,
+  createdStudent:null,
   justSaved:false,
 };
 const charts = {};
@@ -377,69 +380,34 @@ const ICONS = {
 /* ---------------- render dispatcher ---------------- */
 function render(){
   const app = document.getElementById('app');
-  if(!state.unlocked){ return renderGate(); }
   if(state.loading){ app.innerHTML = `<div class="shell"><p style="text-align:center;color:var(--ink-soft);padding:60px 0;">Yükleniyor…</p></div>`; return; }
-  if(state.view==='home') return renderHome();
+  if(state.view==='login-select') return renderLoginSelect();
+  if(state.view==='login-password') return renderLoginPassword();
   if(state.view==='student-add') return renderStudentAdd();
+  if(state.view==='student-created') return renderStudentCreated();
   if(state.view==='student-entry') return renderStudentEntry();
   if(state.view==='teacher-pin') return renderTeacherPin();
   if(state.view==='teacher-list') return renderTeacherList();
   if(state.view==='teacher-detail') return renderTeacherDetail();
 }
 
-/* ---------------- GATE (sınıf şifresi) ---------------- */
-function renderGate(){
-  let html = shellOpen();
-  html += `
-    <div class="hero">
-      <div class="eyebrow"><span class="dot"></span>SORU TAKİP DEFTERİ</div>
-      <h1 style="font-size:clamp(24px,6vw,32px);">Bu sayfa sadece<br>bizim sınıfımız için</h1>
-      <p>Devam etmek için öğretmeninin sana verdiği şifreyi gir.</p>
-    </div>
-    <div class="card">
-      <div class="field">
-        <label>Sınıf Şifresi</label>
-        <input type="password" inputmode="text" id="f-gate" placeholder="••••••••" autocomplete="off">
-      </div>
-      <div id="gate-error" style="color:var(--red);font-size:13px;font-weight:600;min-height:16px;margin-bottom:12px;"></div>
-      <button class="btn btn-red btn-block" id="gate-submit">Devam Et</button>
-    </div>`;
-  html += shellClose();
-  document.getElementById('app').innerHTML = html;
-  const submit = ()=>{
-    const val = document.getElementById('f-gate').value;
-    if(val === APP_PASSWORD){
-      state.unlocked = true;
-      render();
-    } else {
-      document.getElementById('gate-error').textContent = 'Şifre yanlış, tekrar dene.';
-      document.getElementById('f-gate').value='';
-      document.getElementById('f-gate').focus();
-    }
-  };
-  document.getElementById('gate-submit').onclick = submit;
-  document.getElementById('f-gate').addEventListener('keydown', (e)=>{ if(e.key==='Enter') submit(); });
-  document.getElementById('f-gate').focus();
-}
-
-/* ---------------- HOME (öğrenci girişi) ---------------- */
-function renderHome(){
-  const totalToday = state.students.reduce((s,st)=>s+sumForDate(st.id, todayStr()),0);
+/* ---------------- LOGIN: isim seç ---------------- */
+function renderLoginSelect(){
   let html = shellOpen();
   if(state.loadError){
     html += `<div class="card" style="border-color:var(--red);background:var(--red-soft);margin-bottom:16px;">
-      <p style="margin:0;font-size:13px;font-weight:600;color:var(--red);">Bağlantı sorunu — veriler yüklenemedi. İnternetini kontrol edip sayfayı yenile. Sorun devam ederse Supabase bağlantı bilgilerinde bir hata olabilir.</p>
+      <p style="margin:0;font-size:13px;font-weight:600;color:var(--red);">Bağlantı sorunu — veriler yüklenemedi. İnternetini kontrol edip sayfayı yenile.</p>
     </div>`;
   }
   html += `
     <div class="hero">
       <div class="eyebrow"><span class="dot"></span>GÜNLÜK SORU TAKİBİ</div>
       <h1>Bugün kaç soru<br>çözdün?</h1>
-      <p>Adını seç ve bugün çözdüğün soruları derslere göre gir.</p>
+      <p>İsmini seç, şifreni gir.</p>
     </div>
     <div class="card">`;
   if(state.students.length===0){
-    html += `<div class="empty"><p>Henüz kayıtlı öğrenci yok. Aşağıdan kendini ekleyerek başla.</p></div>`;
+    html += `<div class="empty"><p>Henüz kayıtlı öğrenci yok. Öğretmenin seni eklemeli.</p></div>`;
   } else {
     state.students.slice().sort((a,b)=>a.name.localeCompare(b.name,'tr')).forEach(st=>{
       const badge = st.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[st.alan]}</span>`;
@@ -447,27 +415,65 @@ function renderHome(){
     });
   }
   html += `</div>`;
-  html += `<button class="btn btn-outline btn-block" id="add-new" style="margin-top:14px;">+ Yeni Öğrenci Ekle</button>`;
-  html += `${state.students.length ? `
-    <div class="stat-strip">
-      <div class="stat-pill"><span class="num mono">${totalToday}</span><span class="label">Bugün Çözülen</span></div>
-      <div class="stat-pill"><span class="num mono">${state.students.length}</span><span class="label">Öğrenci</span></div>
-    </div>` : ''}`;
-  html += `<p class="footer-note">Veriler bu uygulamayı kullanan herkes arasında paylaşılır.</p>`;
   html += `<div class="secret-dot" id="secret-trigger" aria-hidden="true" title=" "><span></span></div>`;
   html += shellClose();
   document.getElementById('app').innerHTML = html;
-  document.getElementById('add-new').onclick = ()=>{ state.teacherReturnAdd=false; state.view='student-add'; render(); };
   document.querySelectorAll('.list-row[data-id]').forEach(row=>{
-    row.onclick = ()=>{ state.currentStudentId = row.getAttribute('data-id'); state.view='student-entry'; render(); };
+    row.onclick = ()=>{ state.pendingStudentId = row.getAttribute('data-id'); state.view='login-password'; render(); };
   });
   document.getElementById('secret-trigger').onclick = ()=>{ state.view='teacher-pin'; render(); };
 }
 
-/* ---------------- STUDENT ADD ---------------- */
+/* ---------------- LOGIN: şifre gir ---------------- */
+function renderLoginPassword(){
+  const student = state.students.find(s=>s.id===state.pendingStudentId);
+  if(!student){ state.view='login-select'; return render(); }
+  let html = shellOpen();
+  html += `<button class="back-link" id="back">${ICONS.back}İsmimi Değiştir</button>`;
+  html += `<div class="hero" style="padding-top:8px;padding-bottom:6px;">
+    <div class="eyebrow"><span class="dot"></span>${escapeHtml(student.name).toUpperCase()}</div>
+    <h1 style="font-size:26px;font-style:normal;">Şifreni gir</h1>
+  </div>`;
+  html += `<div class="card">`;
+  if(!student.password){
+    html += `<p style="font-size:13.5px;color:var(--ink-soft);margin:0;">Bu öğrenci için henüz şifre belirlenmemiş. Öğretmenine haber ver.</p>`;
+  } else {
+    html += `
+      <div class="field">
+        <label>Şifre</label>
+        <input type="password" inputmode="numeric" id="f-login-pass" placeholder="••••" autocomplete="off">
+      </div>
+      <div id="login-error" style="color:var(--red);font-size:13px;font-weight:600;min-height:16px;margin-bottom:12px;"></div>
+      <button class="btn btn-red btn-block" id="login-submit">Giriş Yap</button>`;
+  }
+  html += `</div>`;
+  html += shellClose();
+  document.getElementById('app').innerHTML = html;
+  document.getElementById('back').onclick = ()=>{ state.pendingStudentId=null; state.view='login-select'; render(); };
+  if(student.password){
+    const submit = ()=>{
+      const val = document.getElementById('f-login-pass').value;
+      if(val === student.password){
+        setRemembered(student.id);
+        state.currentStudentId = student.id;
+        state.pendingStudentId = null;
+        state.view='student-entry';
+        render();
+      } else {
+        document.getElementById('login-error').textContent = 'Şifre yanlış, tekrar dene.';
+        document.getElementById('f-login-pass').value='';
+        document.getElementById('f-login-pass').focus();
+      }
+    };
+    document.getElementById('login-submit').onclick = submit;
+    document.getElementById('f-login-pass').addEventListener('keydown', (e)=>{ if(e.key==='Enter') submit(); });
+    document.getElementById('f-login-pass').focus();
+  }
+}
+
+/* ---------------- STUDENT ADD (öğretmen panelinden) ---------------- */
 function renderStudentAdd(){
   let html = shellOpen();
-  const backView = state.teacherReturnAdd ? 'teacher-list' : 'home';
   html += `<button class="back-link" id="back">${ICONS.back}Geri</button>`;
   html += `<h2 style="font-size:22px;margin-bottom:16px;">Yeni Öğrenci</h2>`;
   html += `<div class="card">
@@ -491,11 +497,19 @@ function renderStudentAdd(){
         <div class="choice" data-alan="dil">Dil</div>
       </div>
     </div>
-    <button class="btn btn-red btn-block" id="save-student">Kaydet ve Başla</button>
+    <div class="field">
+      <label>Öğrenci Şifresi</label>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><input type="text" id="f-password" placeholder="Örn. 4821" autocomplete="off"></div>
+        <button type="button" class="btn btn-outline" id="gen-password" style="white-space:nowrap;">Otomatik</button>
+      </div>
+    </div>
+    <div id="add-error" style="color:var(--red);font-size:13px;font-weight:600;min-height:16px;margin-bottom:4px;"></div>
+    <button class="btn btn-red btn-block" id="save-student">Kaydet</button>
   </div>`;
   html += shellClose();
   document.getElementById('app').innerHTML = html;
-  document.getElementById('back').onclick = ()=>{ state.view=backView; render(); };
+  document.getElementById('back').onclick = ()=>{ state.view='teacher-list'; render(); };
 
   let chosenType='LGS', chosenAlan='sayisal';
   document.querySelectorAll('[data-type]').forEach(el=>{
@@ -509,15 +523,42 @@ function renderStudentAdd(){
     if(i===0) el.classList.add('active');
     el.onclick=()=>{ chosenAlan = el.getAttribute('data-alan'); document.querySelectorAll('[data-alan]').forEach(x=>x.classList.toggle('active', x===el)); };
   });
+  document.getElementById('gen-password').onclick = ()=>{ document.getElementById('f-password').value = generatePassword(); };
   document.getElementById('save-student').onclick = async ()=>{
     const name = document.getElementById('f-name').value.trim();
+    const password = document.getElementById('f-password').value.trim();
     if(!name){ document.getElementById('f-name').focus(); return; }
-    const student = { id:uid(), name, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, createdAt: Date.now() };
+    if(!password){ document.getElementById('add-error').textContent = 'Öğrenci için bir şifre belirle.'; document.getElementById('f-password').focus(); return; }
+    const student = { id:uid(), name, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, password, createdAt: Date.now() };
     state.students.push(student);
     await persistData();
-    if(state.teacherReturnAdd){ state.view='teacher-list'; render(); }
-    else { state.currentStudentId = student.id; state.view='student-entry'; render(); }
+    state.createdStudent = student;
+    state.view='student-created';
+    render();
   };
+}
+
+/* ---------------- STUDENT CREATED (şifreyi göster) ---------------- */
+function renderStudentCreated(){
+  const student = state.createdStudent;
+  if(!student){ state.view='teacher-list'; return render(); }
+  let html = shellOpen();
+  html += `<div class="hero" style="padding-top:10px;padding-bottom:10px;">
+    <div class="eyebrow"><span class="dot"></span>ÖĞRENCİ EKLENDİ</div>
+    <h1 style="font-size:26px;">${escapeHtml(student.name)} hazır</h1>
+    <p>Bu bilgileri öğrenciye ilet — girişte bunları kullanacak.</p>
+  </div>`;
+  html += `<div class="card">
+    <div class="field"><label>İsim</label><div style="font-size:16px;font-weight:600;">${escapeHtml(student.name)}</div></div>
+    <div class="field" style="margin-bottom:0;">
+      <label>Şifre</label>
+      <div class="total-box" style="margin-top:4px;"><span class="num mono" style="font-size:26px;">${escapeHtml(student.password)}</span></div>
+    </div>
+    <button class="btn btn-red btn-block" id="done" style="margin-top:18px;">Tamam, Listeye Dön</button>
+  </div>`;
+  html += shellClose();
+  document.getElementById('app').innerHTML = html;
+  document.getElementById('done').onclick = ()=>{ state.createdStudent=null; state.view='teacher-list'; render(); };
 }
 
 /* ---------------- STUDENT ENTRY ---------------- */
@@ -525,7 +566,7 @@ let currentCounts = {};
 
 function renderStudentEntry(){
   const student = state.students.find(s=>s.id===state.currentStudentId);
-  if(!student){ state.view='home'; return render(); }
+  if(!student){ state.view='login-select'; return render(); }
   const today = todayStr();
   const subjects = getSubjects(student);
   const existing = entriesFor(student.id).find(e=>e.date===today);
@@ -539,7 +580,7 @@ function renderStudentEntry(){
   state.justSaved = false;
 
   let html = shellOpen();
-  html += `<button class="back-link" id="back">${ICONS.back}Öğrenci Değiştir</button>`;
+  html += `<button class="back-link" id="back">${ICONS.back}Çıkış Yap</button>`;
   html += `<div class="top-row"><div><h2 style="font-size:22px;">${escapeHtml(student.name)}</h2><div style="margin-top:6px;">${badge}</div></div>
   ${streak>=2 ? `<div class="streak">${ICONS.flame}${streak} gün üst üste</div>`:''}
   </div>`;
@@ -572,7 +613,7 @@ function renderStudentEntry(){
   html += shellClose();
   document.getElementById('app').innerHTML = html;
 
-  document.getElementById('back').onclick = ()=>{ state.view='home'; render(); };
+  document.getElementById('back').onclick = ()=>{ clearRemembered(); state.currentStudentId=null; state.view='login-select'; render(); };
 
   document.querySelectorAll('.num-input').forEach(inp=>{
     inp.addEventListener('input', ()=>{
@@ -639,7 +680,7 @@ function renderTeacherPin(){
   document.getElementById('app').innerHTML = html;
 
   const clearHash = ()=>{ history.replaceState(null,'',location.pathname+location.search); };
-  document.getElementById('back').onclick = ()=>{ clearHash(); state.view='home'; render(); };
+  document.getElementById('back').onclick = ()=>{ clearHash(); state.view='login-select'; render(); };
   const submit = ()=>{
     const val = document.getElementById('f-pin').value.trim();
     if(val === TEACHER_PIN){
@@ -691,8 +732,8 @@ function renderTeacherList(){
   html += `</div>`;
   html += shellClose();
   document.getElementById('app').innerHTML = html;
-  document.getElementById('back').onclick = ()=>{ state.view='home'; render(); };
-  document.getElementById('add-student').onclick = ()=>{ state.teacherReturnAdd=true; state.view='student-add'; render(); };
+  document.getElementById('back').onclick = ()=>{ state.view='login-select'; render(); };
+  document.getElementById('add-student').onclick = ()=>{ state.view='student-add'; render(); };
   document.querySelectorAll('.list-row[data-id]').forEach(row=>{
     row.onclick = ()=>{ state.teacherStudentId = row.getAttribute('data-id'); state.view='teacher-detail'; render(); };
   });
@@ -710,6 +751,16 @@ function renderTeacherDetail(){
   html += `<button class="back-link" id="back">${ICONS.back}Tüm Öğrenciler</button>`;
   html += `<div class="top-row"><div><h2 style="font-size:24px;">${escapeHtml(student.name)}</h2><div style="margin-top:6px;">${badge}</div></div>
     ${streak>=2 ? `<div class="streak">${ICONS.flame}${streak} gün üst üste</div>`:''}</div>`;
+
+  html += `<div class="card" style="margin-bottom:20px;">
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Giriş Şifresi</label>
+    <div id="pw-card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span class="num mono" style="font-size:18px;">${escapeHtml(student.password || 'Belirlenmedi')}</span>
+        <button class="btn btn-outline" id="change-pw" style="padding:8px 14px;font-size:13px;">Değiştir</button>
+      </div>
+    </div>
+  </div>`;
 
   const dstats = periodStats(student.id);
   html += `<div class="stat-strip">
@@ -760,6 +811,23 @@ function renderTeacherDetail(){
   html += shellClose();
   document.getElementById('app').innerHTML = html;
   document.getElementById('back').onclick = ()=>{ state.view='teacher-list'; render(); };
+  document.getElementById('change-pw').onclick = ()=>{
+    const body = document.getElementById('pw-card-body');
+    body.innerHTML = `
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><input type="text" id="f-new-pw" value="${escapeHtml(student.password||'')}" autocomplete="off"></div>
+        <button type="button" class="btn btn-outline" id="gen-new-pw" style="white-space:nowrap;">Otomatik</button>
+      </div>
+      <button class="btn btn-red btn-block" id="save-new-pw" style="margin-top:10px;">Kaydet</button>`;
+    document.getElementById('gen-new-pw').onclick = ()=>{ document.getElementById('f-new-pw').value = generatePassword(); };
+    document.getElementById('save-new-pw').onclick = async ()=>{
+      const val = document.getElementById('f-new-pw').value.trim();
+      if(!val) return;
+      student.password = val;
+      await persistData();
+      render();
+    };
+  };
 
   drawTrendChart(student.id);
   drawSubjectsChart(student);
@@ -812,7 +880,18 @@ function drawSubjectsChart(student){
 /* ---------------- init ---------------- */
 loadAll().then(()=>{
   const h = location.hash.replace('#','').toLowerCase();
-  if(h==='hoca' || h==='ogretmen' || h==='öğretmen'){ state.view='teacher-pin'; render(); }
+  if(h==='hoca' || h==='ogretmen' || h==='öğretmen'){
+    state.view='teacher-pin'; render(); return;
+  }
+  const remembered = getRemembered();
+  if(remembered && state.students.some(s=>s.id===remembered)){
+    state.currentStudentId = remembered;
+    state.view='student-entry';
+  } else {
+    if(remembered) clearRemembered();
+    state.view='login-select';
+  }
+  render();
 });
 </script>
 </body>
