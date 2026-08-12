@@ -355,16 +355,27 @@ async function loadAll(){
   state.loading = false;
   render();
 }
-async function persistData(){
+async function withLatestData(mutator){
   try{
-    const { error } = await _supabase.from('soru_takip')
-      .update({ data: { students: state.students, entries: state.entries } })
-      .eq('id', 1);
+    const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).single();
     if(error) throw error;
+    const payload = (data && data.data) ? data.data : { students:[], entries:[] };
+    const students = payload.students || [];
+    const entries = payload.entries || [];
+    const ok = mutator(students, entries);
+    if(ok === false) return false;
+    const { error: err2 } = await _supabase.from('soru_takip')
+      .update({ data: { students, entries } })
+      .eq('id', 1);
+    if(err2) throw err2;
+    state.students = students;
+    state.entries = entries;
     state.loadError = false;
+    return true;
   } catch(e){
     console.error('Kaydedilemedi', e);
     alert('Kaydedilemedi — internet bağlantını kontrol edip tekrar dene.');
+    return false;
   }
 }
 
@@ -512,14 +523,18 @@ function renderStudentAdd(){
     const password = document.getElementById('f-password').value.trim();
     if(!name){ document.getElementById('f-name').focus(); return; }
     if(!username){ document.getElementById('add-error').textContent = 'Bir kullanıcı adı belirle.'; document.getElementById('f-username').focus(); return; }
-    if(state.students.some(s=>(s.username||'').toLowerCase()===username.toLowerCase())){
+    if(!password){ document.getElementById('add-error').textContent = 'Öğrenci için bir şifre belirle.'; document.getElementById('f-password').focus(); return; }
+    const student = { id:uid(), name, username, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, password, createdAt: Date.now() };
+    let duplicate = false;
+    const ok = await withLatestData((students)=>{
+      if(students.some(s=>(s.username||'').toLowerCase()===username.toLowerCase())){ duplicate = true; return false; }
+      students.push(student);
+    });
+    if(duplicate){
       document.getElementById('add-error').textContent = 'Bu kullanıcı adı zaten kullanılıyor, başka bir tane dene.';
       document.getElementById('f-username').focus(); return;
     }
-    if(!password){ document.getElementById('add-error').textContent = 'Öğrenci için bir şifre belirle.'; document.getElementById('f-password').focus(); return; }
-    const student = { id:uid(), name, username, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, password, createdAt: Date.now() };
-    state.students.push(student);
-    await persistData();
+    if(!ok) return;
     state.createdStudent = student;
     state.view='student-created';
     render();
@@ -634,10 +649,13 @@ function renderStudentEntry(){
   });
 
   document.getElementById('save-entry').onclick = async ()=>{
-    const idx = state.entries.findIndex(e=>e.studentId===student.id && e.date===today);
-    const payload = { id: idx>=0? state.entries[idx].id : uid(), studentId: student.id, date: today, subjects: {...currentCounts}, savedAt: Date.now() };
-    if(idx>=0) state.entries[idx] = payload; else state.entries.push(payload);
-    await persistData();
+    const entryId = uid();
+    const ok = await withLatestData((students, entries)=>{
+      const idx = entries.findIndex(e=>e.studentId===student.id && e.date===today);
+      const payload = { id: idx>=0? entries[idx].id : entryId, studentId: student.id, date: today, subjects: {...currentCounts}, savedAt: Date.now() };
+      if(idx>=0) entries[idx] = payload; else entries.push(payload);
+    });
+    if(!ok) return;
     state.justSaved = true;
     render();
   };
@@ -842,12 +860,14 @@ function renderTeacherDetail(){
       const newUser = document.getElementById('f-new-user').value.trim();
       const newPw = document.getElementById('f-new-pw').value.trim();
       if(!newUser || !newPw){ document.getElementById('cred-error').textContent = 'Kullanıcı adı ve şifre boş olamaz.'; return; }
-      if(state.students.some(s=>s.id!==student.id && (s.username||'').toLowerCase()===newUser.toLowerCase())){
-        document.getElementById('cred-error').textContent = 'Bu kullanıcı adı başka bir öğrencide kayıtlı.'; return;
-      }
-      student.username = newUser;
-      student.password = newPw;
-      await persistData();
+      let duplicate = false;
+      const ok = await withLatestData((students)=>{
+        if(students.some(s=>s.id!==student.id && (s.username||'').toLowerCase()===newUser.toLowerCase())){ duplicate = true; return false; }
+        const s = students.find(x=>x.id===student.id);
+        if(s){ s.username = newUser; s.password = newPw; }
+      });
+      if(duplicate){ document.getElementById('cred-error').textContent = 'Bu kullanıcı adı başka bir öğrencide kayıtlı.'; return; }
+      if(!ok) return;
       render();
     };
   };
