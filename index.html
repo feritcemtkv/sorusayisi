@@ -590,6 +590,26 @@ function renderStudentEntry(){
     <div class="stat-pill"><span class="num mono">${stats.lastMonth}</span><span class="label">Geçen Ay</span></div>
   </div>`;
 
+  const hasEntries = entriesFor(student.id).length>0;
+  const weekStart = startOfWeekMonday(today);
+  const breakdown = subjectBreakdown(student, weekStart, today);
+  html += `<div class="section-title">Derslere Göre</div>
+  <div class="card">`;
+  if(!hasEntries){
+    html += `<div class="empty"><p>Henüz veri yok.</p></div>`;
+  } else {
+    html += `<div class="chart-wrap" style="height:${Math.max(180, breakdown.length*32)}px;"><canvas id="chart-subjects"></canvas></div>
+    <table class="entries" style="margin-top:18px;">
+      <thead><tr><th>Ders</th><th style="text-align:right;">Bu Hafta</th><th style="text-align:right;">Toplam</th></tr></thead>
+      <tbody>`;
+    breakdown.forEach(b=>{
+      const name = b.subject.replace(' (TYT)','').replace(' (AYT)','');
+      html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
   html += `<div class="section-title">Son 7 Gün</div>
   <div class="card"><div class="chart-wrap"><canvas id="chart-week"></canvas></div></div>`;
 
@@ -617,6 +637,7 @@ function renderStudentEntry(){
   };
 
   drawWeekChart(student.id);
+  drawSubjectsChart(student);
 
   if(justSaved){
     setTimeout(()=>{ const n=document.getElementById('save-note'); if(n) n.innerHTML=''; }, 2500);
