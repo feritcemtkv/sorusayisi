@@ -141,7 +141,7 @@
 
   .field{margin-bottom:16px;}
   .field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;}
-  .field input[type=text], .field input[type=password]{
+  .field input[type=text], .field input[type=password], .field input[type=number]{
     width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;
     font-size:15px;font-family:'Inter',sans-serif;background:var(--paper);color:var(--ink);
   }
@@ -243,6 +243,35 @@ const MOTIVATIONAL_QUOTES = [
   { text:'Başarı bir yolculuktur, varış noktası değil.', author:'Arthur Ashe' },
 ];
 
+// Gemini API — günlük hedefe göre kısa değerlendirme yazar
+const GEMINI_API_KEY = 'AQ.Ab8RN6KfN2hue8rYIAKGKhcMhJpaPc43AaBA5lTH7uGBX_GIzQ';
+const GEMINI_MODEL = 'gemini-3.6-flash';
+async function getGeminiVerdict(studentName, target, actual){
+  try{
+    const prompt = `Sen bir özel ders öğretmeninin öğrencisine yazdığı kısa, samimi bir Türkçe geri bildirim asistanısın. Öğrencinin adı: ${studentName}. Bugünkü hedefi: ${target} soru. Bugün çözdüğü: ${actual} soru. Bu bilgiye göre, öğrenciye doğrudan hitap eden, 1-2 cümlelik, samimi ve motive edici bir Türkçe değerlendirme yaz. Sadece değerlendirme metnini yaz; başlık, tırnak işareti veya ek açıklama ekleme.`;
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'x-goog-api-key': GEMINI_API_KEY
+      },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    if(!res.ok){
+      const errText = await res.text().catch(()=> '');
+      console.error('Gemini API hata yanıtı', res.status, errText);
+      return null;
+    }
+    const data = await res.json();
+    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+      data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+    return text ? text.trim() : null;
+  } catch(e){
+    console.error('Gemini hatası', e);
+    return null;
+  }
+}
+
 function getSubjects(student){
   if(!student) return [];
   if(student.type==='LGS') return LGS_SUBJECTS.slice();
@@ -261,6 +290,8 @@ const state = {
   createdStudent:null,
   justSaved:false,
   motivationalQuote:null,
+  geminiVerdict:null,
+  geminiLoading:false,
 };
 const charts = {};
 
@@ -582,6 +613,7 @@ function renderStudentCreated(){
 
 /* ---------------- STUDENT ENTRY ---------------- */
 let currentCounts = {};
+let saveNoteTimer = null;
 
 function renderStudentEntry(){
   const student = state.students.find(s=>s.id===state.currentStudentId);
@@ -597,8 +629,8 @@ function renderStudentEntry(){
   const stats = periodStats(student.id);
   const justSaved = state.justSaved;
   const motivationalQuote = state.motivationalQuote;
-  state.justSaved = false;
-  state.motivationalQuote = null;
+  const geminiVerdict = state.geminiVerdict;
+  const geminiLoading = state.geminiLoading;
 
   let html = shellOpen();
   html += `<button class="back-link" id="back">${ICONS.back}Çıkış Yap</button>`;
@@ -607,7 +639,7 @@ function renderStudentEntry(){
   </div>`;
 
   html += `<div class="card">
-    <div class="field"><label>Bugün · ${longLabel(today)}</label></div>`;
+    <div class="field"><label>Bugün · ${longLabel(today)}${student.dailyTarget ? ` · Hedef: ${student.dailyTarget} soru` : ''}</label></div>`;
   subjects.forEach((s,i)=>{
     const group = s.includes('(AYT)') ? 'AYT' : (s.includes('(TYT)') ? 'TYT' : '');
     html += `<div class="subject-row">
@@ -621,6 +653,10 @@ function renderStudentEntry(){
     ${justSaved && motivationalQuote ? `<div style="margin-top:8px;padding:12px 14px;background:var(--gold-soft);border-radius:10px;text-align:center;">
       <div style="font-size:13.5px;font-weight:600;color:var(--gold);font-style:italic;">"${escapeHtml(motivationalQuote.text)}"</div>
       <div style="font-size:11.5px;font-weight:600;color:var(--gold);margin-top:4px;opacity:.8;">— ${escapeHtml(motivationalQuote.author)}</div>
+    </div>` : ''}
+    ${student.dailyTarget && (geminiLoading || geminiVerdict) ? `<div style="margin-top:8px;padding:12px 14px;background:var(--grid-soft);border-radius:10px;">
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:4px;">Gemini Değerlendirmesi</div>
+      ${geminiLoading ? `<div style="font-size:13px;color:var(--ink-soft);">Değerlendiriliyor…</div>` : `<div style="font-size:13.5px;font-weight:600;color:var(--ink);">${escapeHtml(geminiVerdict)}</div>`}
     </div>` : ''}
   </div>`;
 
@@ -685,6 +721,7 @@ function renderStudentEntry(){
 
   document.getElementById('save-entry').onclick = async ()=>{
     const entryId = uid();
+    const todayTotal = Object.values(currentCounts).reduce((a,b)=>a+b,0);
     const ok = await withLatestData((students, entries)=>{
       const idx = entries.findIndex(e=>e.studentId===student.id && e.date===today);
       const payload = { id: idx>=0? entries[idx].id : entryId, studentId: student.id, date: today, subjects: {...currentCounts}, savedAt: Date.now() };
@@ -693,16 +730,29 @@ function renderStudentEntry(){
     if(!ok) return;
     state.justSaved = true;
     state.motivationalQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random()*MOTIVATIONAL_QUOTES.length)];
+    state.geminiVerdict = null;
+    state.geminiLoading = !!student.dailyTarget;
     render();
+
+    clearTimeout(saveNoteTimer);
+    saveNoteTimer = setTimeout(()=>{
+      state.justSaved=false; state.motivationalQuote=null; state.geminiVerdict=null; state.geminiLoading=false;
+      if(state.view==='student-entry' && state.currentStudentId===student.id){
+        const n=document.getElementById('save-note'); if(n) n.innerHTML='';
+      }
+    }, 12000);
+
+    if(student.dailyTarget){
+      const verdict = await getGeminiVerdict(student.name, student.dailyTarget, todayTotal);
+      state.geminiVerdict = verdict || 'Bugünkü ilerlemen kaydedildi, emeğin için teşekkürler!';
+      state.geminiLoading = false;
+      if(state.view==='student-entry' && state.currentStudentId===student.id) render();
+    }
   };
 
   drawWeekChart(student.id);
   drawSubjectsChart(student);
   drawPercentPie('chart-pie', 'pie', pieLabels, pieData);
-
-  if(justSaved){
-    setTimeout(()=>{ const n=document.getElementById('save-note'); if(n) n.innerHTML=''; }, 4000);
-  }
 }
 
 function chartUnavailableNote(canvas){
@@ -838,6 +888,16 @@ function renderTeacherDetail(){
     </div>
   </div>`;
 
+  html += `<div class="card" style="margin-bottom:20px;">
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Günlük Hedef</label>
+    <div id="target-card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span class="num mono" style="font-size:18px;">${student.dailyTarget ? student.dailyTarget + ' soru' : 'Belirlenmedi'}</span>
+        <button class="btn btn-outline" id="change-target" style="padding:8px 14px;font-size:13px;">Değiştir</button>
+      </div>
+    </div>
+  </div>`;
+
   const todayBreakdown = getSubjects(student).map(s=>({
     subject: s,
     group: s.includes('(AYT)') ? 'AYT' : (s.includes('(TYT)') ? 'TYT' : ''),
@@ -945,6 +1005,24 @@ function renderTeacherDetail(){
         if(s){ s.username = newUser; s.password = newPw; }
       });
       if(duplicate){ document.getElementById('cred-error').textContent = 'Bu kullanıcı adı başka bir öğrencide kayıtlı.'; return; }
+      if(!ok) return;
+      render();
+    };
+  };
+
+  document.getElementById('change-target').onclick = ()=>{
+    const body = document.getElementById('target-card-body');
+    body.innerHTML = `
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><input type="number" min="1" id="f-new-target" value="${student.dailyTarget||''}" placeholder="Örn. 50"></div>
+      </div>
+      <button class="btn btn-red btn-block" id="save-new-target" style="margin-top:10px;">Kaydet</button>`;
+    document.getElementById('save-new-target').onclick = async ()=>{
+      const val = parseInt(document.getElementById('f-new-target').value)||0;
+      const ok = await withLatestData((students)=>{
+        const s = students.find(x=>x.id===student.id);
+        if(s) s.dailyTarget = val>0 ? val : null;
+      });
       if(!ok) return;
       render();
     };
