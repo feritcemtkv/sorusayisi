@@ -228,6 +228,20 @@ function suggestUsername(name){
   s = s.replace(/[^a-z0-9]+/g,'');
   return s || 'ogrenci';
 }
+const MOTIVATIONAL_QUOTES = [
+  'Harika gidiyorsun, böyle devam! 💪',
+  'Her soru seni hedefine biraz daha yaklaştırıyor.',
+  'Bugün de bir adım attın, gurur duy!',
+  'Emek her zaman karşılığını verir.',
+  'Bugünün çabası, yarının başarısı.',
+  'Sen yapabilirsin, devam et!',
+  'Küçük adımlar büyük başarılar getirir.',
+  'Disiplin, yeteneği geçer. Harikasın!',
+  'Bir soru daha, bir adım daha ileri!',
+  'İstikrar en büyük güçtür, bunu kanıtlıyorsun.',
+  'Bugün bıraktığın iz, yarının başarısı olacak.',
+  'Çalışmak seni hedefe taşıyor, devam!',
+];
 
 function getSubjects(student){
   if(!student) return [];
@@ -246,6 +260,7 @@ const state = {
   teacherStudentId:null,
   createdStudent:null,
   justSaved:false,
+  motivationalQuote:null,
 };
 const charts = {};
 
@@ -581,7 +596,9 @@ function renderStudentEntry(){
   const streak = calcStreak(student.id);
   const stats = periodStats(student.id);
   const justSaved = state.justSaved;
+  const motivationalQuote = state.motivationalQuote;
   state.justSaved = false;
+  state.motivationalQuote = null;
 
   let html = shellOpen();
   html += `<button class="back-link" id="back">${ICONS.back}Çıkış Yap</button>`;
@@ -601,6 +618,7 @@ function renderStudentEntry(){
   html += `<div class="total-box"><span class="label">Toplam</span><span class="num mono" id="entry-total">${Object.values(currentCounts).reduce((a,b)=>a+b,0)}</span></div>
     <button class="btn btn-red btn-block" id="save-entry" style="margin-top:16px;">Kaydet</button>
     <div class="save-note" id="save-note">${justSaved ? `${ICONS.check}Kaydedildi` : ''}</div>
+    ${justSaved && motivationalQuote ? `<div style="margin-top:8px;padding:12px 14px;background:var(--gold-soft);border-radius:10px;font-size:13.5px;font-weight:600;color:var(--gold);text-align:center;">${escapeHtml(motivationalQuote)}</div>` : ''}
   </div>`;
 
   html += `<div class="section-title">Geçmişin</div>
@@ -609,6 +627,7 @@ function renderStudentEntry(){
     <div class="stat-pill"><span class="num mono">${stats.lastWeek}</span><span class="label">Geçen Hafta</span></div>
     <div class="stat-pill"><span class="num mono">${stats.thisMonth}</span><span class="label">Bu Ay</span></div>
     <div class="stat-pill"><span class="num mono">${stats.lastMonth}</span><span class="label">Geçen Ay</span></div>
+    <div class="stat-pill"><span class="num mono">${stats.allTime}</span><span class="label">Tüm Zamanlar</span></div>
   </div>`;
 
   const hasEntries = entriesFor(student.id).length>0;
@@ -628,6 +647,18 @@ function renderStudentEntry(){
       html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td></tr>`;
     });
     html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  const pieLabels = subjects.map(s=>s.replace(' (TYT)','').replace(' (AYT)',''));
+  const pieData = subjects.map(s=> (subjectTotals(student.id)[s])||0);
+  html += `<div class="section-title">Derslere Göre (%)</div>
+  <div class="card">`;
+  if(!hasEntries){
+    html += `<div class="empty"><p>Henüz veri yok.</p></div>`;
+  } else {
+    html += `<div class="chart-wrap" style="height:220px;"><canvas id="chart-pie"></canvas></div>`;
+    html += percentLegendHtml(pieLabels, pieData);
   }
   html += `</div>`;
 
@@ -657,14 +688,16 @@ function renderStudentEntry(){
     });
     if(!ok) return;
     state.justSaved = true;
+    state.motivationalQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random()*MOTIVATIONAL_QUOTES.length)];
     render();
   };
 
   drawWeekChart(student.id);
   drawSubjectsChart(student);
+  drawPercentPie('chart-pie', 'pie', pieLabels, pieData);
 
   if(justSaved){
-    setTimeout(()=>{ const n=document.getElementById('save-note'); if(n) n.innerHTML=''; }, 2500);
+    setTimeout(()=>{ const n=document.getElementById('save-note'); if(n) n.innerHTML=''; }, 4000);
   }
 }
 
@@ -793,6 +826,24 @@ function renderTeacherDetail(){
     </div>
   </div>`;
 
+  const todayBreakdown = getSubjects(student).map(s=>({
+    subject: s,
+    group: s.includes('(AYT)') ? 'AYT' : (s.includes('(TYT)') ? 'TYT' : ''),
+    count: (subjectTotalsRange(student.id, todayStr(), todayStr())[s]) || 0,
+  }));
+  const todayTotal = todayBreakdown.reduce((a,b)=>a+b.count,0);
+  html += `<div class="section-title">Bugün Derslere Göre</div>
+  <div class="card" style="margin-bottom:20px;">`;
+  if(todayTotal===0){
+    html += `<div class="empty"><p>Bugün henüz soru girilmemiş.</p></div>`;
+  } else {
+    todayBreakdown.filter(b=>b.count>0).forEach(b=>{
+      const name = b.subject.replace(' (TYT)','').replace(' (AYT)','');
+      html += `<div class="subject-row"><span class="sname">${escapeHtml(name)}${b.group?`<span class="chip">${b.group}</span>`:''}</span><span class="num mono">${b.count}</span></div>`;
+    });
+  }
+  html += `</div>`;
+
   const dstats = periodStats(student.id);
   html += `<div class="stat-strip">
     <div class="stat-pill"><span class="num mono">${dstats.today}</span><span class="label">Bugün</span></div>
@@ -803,7 +854,9 @@ function renderTeacherDetail(){
     <div class="stat-pill"><span class="num mono">${dstats.allTime}</span><span class="label">Tüm Zamanlar</span></div>
   </div>`;
 
-  html += `<div class="section-title">Son 30 Gün</div>
+  const trendDays = trendRange(student.id);
+  const trendTitle = trendDays.length<30 ? 'İlk Günden Bugüne' : 'Son 30 Gün';
+  html += `<div class="section-title">${trendTitle}</div>
   <div class="card"><div class="chart-wrap tall"><canvas id="chart-trend"></canvas></div></div>`;
 
   const hasEntries = entriesFor(student.id).length>0;
@@ -823,6 +876,18 @@ function renderTeacherDetail(){
       html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td></tr>`;
     });
     html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  const pieLabels = getSubjects(student).map(s=>s.replace(' (TYT)','').replace(' (AYT)',''));
+  const pieData = getSubjects(student).map(s=> (subjectTotals(student.id)[s])||0);
+  html += `<div class="section-title">Derslere Göre Dağılım (%)</div>
+  <div class="card">`;
+  if(!hasEntries){
+    html += `<div class="empty"><p>Henüz ders bazlı veri yok.</p></div>`;
+  } else {
+    html += `<div class="chart-wrap" style="height:220px;"><canvas id="chart-pie"></canvas></div>`;
+    html += percentLegendHtml(pieLabels, pieData);
   }
   html += `</div>`;
 
@@ -874,12 +939,24 @@ function renderTeacherDetail(){
 
   drawTrendChart(student.id);
   drawSubjectsChart(student);
+  drawPercentPie('chart-pie', 'pie', pieLabels, pieData);
 }
 
+function trendRange(studentId){
+  const today = todayStr();
+  const floor = addDays(today, -29);
+  const active = entriesFor(studentId).filter(e=>totalOf(e)>0).map(e=>e.date).sort();
+  let start = floor;
+  if(active.length>0 && active[0]>floor) start = active[0];
+  const days = [];
+  let d = start;
+  while(d<=today){ days.push(d); d = addDays(d,1); }
+  return days;
+}
 function drawTrendChart(studentId){
   const canvas = document.getElementById('chart-trend');
   if(!canvas || !window.Chart) return;
-  const days = rangeDates(todayStr(), 30);
+  const days = trendRange(studentId);
   const data = days.map(d=>sumForDate(studentId,d));
   if(charts.trend) charts.trend.destroy();
   charts.trend = new Chart(canvas.getContext('2d'), {
@@ -918,6 +995,40 @@ function drawSubjectsChart(student){
       }
     }
   });
+}
+
+function drawPercentPie(canvasId, chartKey, labels, data){
+  const canvas = document.getElementById(canvasId);
+  if(!canvas || !window.Chart) return;
+  if(charts[chartKey]) charts[chartKey].destroy();
+  const total = data.reduce((a,b)=>a+b,0);
+  if(total===0) return;
+  charts[chartKey] = new Chart(canvas.getContext('2d'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data, backgroundColor: labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderWidth:2, borderColor:'#FFFFFF' }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{ display:false },
+        tooltip:{ callbacks:{ label:(c)=>{ const pct = Math.round(c.parsed/total*100); return `${c.label}: ${c.parsed} soru (%${pct})`; } } }
+      }
+    }
+  });
+}
+
+function percentLegendHtml(labels, data){
+  const total = data.reduce((a,b)=>a+b,0);
+  if(total===0) return '';
+  return `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">` +
+    labels.map((label,i)=>{
+      const pct = Math.round(data[i]/total*100);
+      const color = PALETTE[i%PALETTE.length];
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:13px;">
+        <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0;"></span>
+        <span style="flex:1;">${escapeHtml(label)}</span>
+        <span class="mono" style="font-weight:600;">%${pct}</span>
+      </div>`;
+    }).join('') + `</div>`;
 }
 
 /* ---------------- init ---------------- */
