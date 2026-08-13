@@ -672,6 +672,7 @@ function renderStudentEntry(){
   const hasEntries = entriesFor(student.id).length>0;
   const weekStart = startOfWeekMonday(today);
   const breakdown = subjectBreakdown(student, weekStart, today);
+  const breakdownTotal = breakdown.reduce((s,b)=>s+b.all,0);
   html += `<div class="section-title">Derslere Göre</div>
   <div class="card">`;
   if(!hasEntries){
@@ -679,26 +680,14 @@ function renderStudentEntry(){
   } else {
     html += `<div class="chart-wrap" style="height:${Math.max(180, breakdown.length*32)}px;"><canvas id="chart-subjects"></canvas></div>
     <table class="entries" style="margin-top:18px;">
-      <thead><tr><th>Ders</th><th style="text-align:right;">Bu Hafta</th><th style="text-align:right;">Toplam</th></tr></thead>
+      <thead><tr><th>Ders</th><th style="text-align:right;">Bu Hafta</th><th style="text-align:right;">Toplam</th><th style="text-align:right;">%</th></tr></thead>
       <tbody>`;
     breakdown.forEach(b=>{
       const name = b.subject.replace(' (TYT)','').replace(' (AYT)','');
-      html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td></tr>`;
+      const pct = breakdownTotal>0 ? Math.round(b.all/breakdownTotal*100) : 0;
+      html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td><td class="n" style="text-align:right;color:var(--ink-soft);">%${pct}</td></tr>`;
     });
     html += `</tbody></table>`;
-  }
-  html += `</div>`;
-
-  const pieLabels = subjects.map(s=>s.replace(' (TYT)','').replace(' (AYT)',''));
-  const pieData = subjects.map(s=> (subjectTotals(student.id)[s])||0);
-  html += `<div class="section-title">Derslere Göre (%)</div>
-  <div class="card">`;
-  if(!hasEntries){
-    html += `<div class="empty"><p>Henüz veri yok.</p></div>`;
-  } else {
-    html += `<p style="font-size:12px;color:var(--ink-soft);margin:0 0 10px;">Bugüne kadar çözdüğün tüm soruların derslere göre dağılımı.</p>`;
-    html += `<div class="chart-wrap" style="height:220px;"><canvas id="chart-pie"></canvas></div>`;
-    html += percentLegendHtml(pieLabels, pieData);
   }
   html += `</div>`;
 
@@ -752,7 +741,6 @@ function renderStudentEntry(){
 
   drawWeekChart(student.id);
   drawSubjectsChart(student);
-  drawPercentPie('chart-pie', 'pie', pieLabels, pieData);
 }
 
 function chartUnavailableNote(canvas){
@@ -934,6 +922,7 @@ function renderTeacherDetail(){
   const hasEntries = entriesFor(student.id).length>0;
   const weekStart = startOfWeekMonday(todayStr());
   const breakdown = subjectBreakdown(student, weekStart, todayStr());
+  const breakdownTotal = breakdown.reduce((s,b)=>s+b.all,0);
   html += `<div class="section-title">Derslere Göre Dağılım</div>
   <div class="card">`;
   if(!hasEntries){
@@ -941,26 +930,14 @@ function renderTeacherDetail(){
   } else {
     html += `<div class="chart-wrap" style="height:${Math.max(200, breakdown.length*34)}px;"><canvas id="chart-subjects"></canvas></div>
     <table class="entries" style="margin-top:20px;">
-      <thead><tr><th>Ders</th><th style="text-align:right;">Bu Hafta</th><th style="text-align:right;">Toplam</th></tr></thead>
+      <thead><tr><th>Ders</th><th style="text-align:right;">Bu Hafta</th><th style="text-align:right;">Toplam</th><th style="text-align:right;">%</th></tr></thead>
       <tbody>`;
     breakdown.forEach(b=>{
       const name = b.subject.replace(' (TYT)','').replace(' (AYT)','');
-      html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td></tr>`;
+      const pct = breakdownTotal>0 ? Math.round(b.all/breakdownTotal*100) : 0;
+      html += `<tr><td>${escapeHtml(name)}${b.group?` <span class="chip">${b.group}</span>`:''}</td><td class="n" style="text-align:right;">${b.week}</td><td class="n" style="text-align:right;">${b.all}</td><td class="n" style="text-align:right;color:var(--ink-soft);">%${pct}</td></tr>`;
     });
     html += `</tbody></table>`;
-  }
-  html += `</div>`;
-
-  const pieLabels = getSubjects(student).map(s=>s.replace(' (TYT)','').replace(' (AYT)',''));
-  const pieData = getSubjects(student).map(s=> (subjectTotals(student.id)[s])||0);
-  html += `<div class="section-title">Derslere Göre Dağılım (%)</div>
-  <div class="card">`;
-  if(!hasEntries){
-    html += `<div class="empty"><p>Henüz ders bazlı veri yok.</p></div>`;
-  } else {
-    html += `<p style="font-size:12px;color:var(--ink-soft);margin:0 0 10px;">Bugüne kadar çözdüğü tüm soruların derslere göre dağılımı.</p>`;
-    html += `<div class="chart-wrap" style="height:220px;"><canvas id="chart-pie"></canvas></div>`;
-    html += percentLegendHtml(pieLabels, pieData);
   }
   html += `</div>`;
 
@@ -1030,7 +1007,6 @@ function renderTeacherDetail(){
 
   drawTrendChart(student.id);
   drawSubjectsChart(student);
-  drawPercentPie('chart-pie', 'pie', pieLabels, pieData);
 }
 
 function trendRange(studentId){
@@ -1088,41 +1064,6 @@ function drawSubjectsChart(student){
       }
     }
   });
-}
-
-function drawPercentPie(canvasId, chartKey, labels, data){
-  const canvas = document.getElementById(canvasId);
-  if(!canvas) return;
-  if(!window.Chart){ chartUnavailableNote(canvas); return; }
-  if(charts[chartKey]) charts[chartKey].destroy();
-  const total = data.reduce((a,b)=>a+b,0);
-  if(total===0) return;
-  charts[chartKey] = new Chart(canvas.getContext('2d'), {
-    type:'doughnut',
-    data:{ labels, datasets:[{ data, backgroundColor: labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderWidth:2, borderColor:'#FFFFFF' }] },
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      plugins:{
-        legend:{ display:false },
-        tooltip:{ callbacks:{ label:(c)=>{ const pct = Math.round(c.parsed/total*100); return `${c.label}: ${c.parsed} soru (%${pct})`; } } }
-      }
-    }
-  });
-}
-
-function percentLegendHtml(labels, data){
-  const total = data.reduce((a,b)=>a+b,0);
-  if(total===0) return '';
-  return `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">` +
-    labels.map((label,i)=>{
-      const pct = Math.round(data[i]/total*100);
-      const color = PALETTE[i%PALETTE.length];
-      return `<div style="display:flex;align-items:center;gap:8px;font-size:13px;">
-        <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0;"></span>
-        <span style="flex:1;">${escapeHtml(label)}</span>
-        <span class="mono" style="font-weight:600;">%${pct}</span>
-      </div>`;
-    }).join('') + `</div>`;
 }
 
 /* ---------------- init ---------------- */
