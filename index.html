@@ -9,10 +9,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script type="module">
-  import { GoogleGenAI } from 'https://cdn.jsdelivr.net/npm/@google/genai/+esm';
-  window.GoogleGenAI = GoogleGenAI;
-</script>
 <style>
   :root{
     --paper:#FAFAF6;
@@ -145,7 +141,7 @@
 
   .field{margin-bottom:16px;}
   .field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;}
-  .field input[type=text], .field input[type=password], .field input[type=number]{
+  .field input[type=text], .field input[type=password], .field input[type=number], .field input[type=date]{
     width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;
     font-size:15px;font-family:'Inter',sans-serif;background:var(--paper);color:var(--ink);
   }
@@ -247,49 +243,13 @@ const MOTIVATIONAL_QUOTES = [
   { text:'Başarı bir yolculuktur, varış noktası değil.', author:'Arthur Ashe' },
 ];
 
-// Gemini API — günlük hedefe göre kısa değerlendirme yazar
-const GEMINI_API_KEY = 'AQ.Ab8RN6KfN2hue8rYIAKGKhcMhJpaPc43AaBA5lTH7uGBX_GIzQ';
-const GEMINI_MODEL = 'gemini-3.6-flash';
-let _geminiClient = null;
-function getGeminiClient(){
-  if(!window.GoogleGenAI){ return null; }
-  if(!_geminiClient){ _geminiClient = new window.GoogleGenAI({ apiKey: GEMINI_API_KEY }); }
-  return _geminiClient;
-}
-async function callGemini(prompt){
-  try{
-    const ai = getGeminiClient();
-    if(!ai){ console.error('Gemini SDK henüz yüklenmedi'); return null; }
-    const response = await ai.models.generateContent({ model: GEMINI_MODEL, contents: prompt });
-    const text = response && response.text;
-    return text ? text.trim() : null;
-  } catch(e){
-    console.error('Gemini hatası', e);
-    return null;
+function localTargetVerdict(target, actual){
+  if(actual >= target){
+    const extra = actual - target;
+    return extra>0 ? `Hedefini ${extra} soru farkla geçtin, harikasın! 🎯` : `Tam hedefini tuttun, harika! 🎯`;
   }
-}
-
-async function getGeminiVerdict(studentName, target, actual){
-  const prompt = `Sen bir özel ders öğretmeninin öğrencisine yazdığı kısa, samimi bir Türkçe geri bildirim asistanısın. Öğrencinin adı: ${studentName}. Bugünkü hedefi: ${target} soru. Bugün çözdüğü: ${actual} soru. Bu bilgiye göre, öğrenciye doğrudan hitap eden, 1-2 cümlelik, samimi ve motive edici bir Türkçe değerlendirme yaz. Sadece değerlendirme metnini yaz; başlık, tırnak işareti veya ek açıklama ekleme.`;
-  return await callGemini(prompt);
-}
-
-async function getGeminiTarget(student){
-  const recentAvg = Math.round(sumForRange(student.id,7)/7);
-  const allTime = sumAllTime(student.id);
-  const streak = calcStreak(student.id);
-  const hasHistory = entriesFor(student.id).length>0;
-  const examLabel = student.type==='LGS' ? 'LGS' : `YKS (${ALAN_LABELS[student.alan]} alanı)`;
-  const prompt = hasHistory
-    ? `Sen bir özel ders öğretmeninin, öğrencisi için günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor. Son 7 günün günlük ortalaması: ${recentAvg} soru. Bugüne kadar toplam çözdüğü: ${allTime} soru. Şu anki art arda gün serisi: ${streak}. Bu bilgilere göre, öğrenciyi hem hafifçe zorlayan hem gerçekçi bir günlük soru çözme hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`
-    : `Sen bir özel ders öğretmeninin, yeni bir öğrencisi için başlangıç günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor, henüz hiç veri girmemiş. Yeni başlayan bir öğrenci için makul bir başlangıç günlük hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`;
-  const text = await callGemini(prompt);
-  if(!text) return null;
-  const numMatch = text.match(/HEDEF:\s*(\d+)/i);
-  const reasonMatch = text.match(/SEBEP:\s*(.+)/i);
-  const target = numMatch ? parseInt(numMatch[1]) : null;
-  const reason = reasonMatch ? reasonMatch[1].trim() : '';
-  return (target && target>0) ? { target, reason } : null;
+  const remaining = target - actual;
+  return `Hedefe ${remaining} soru kaldı, biraz daha gayret!`;
 }
 
 function getSubjects(student){
@@ -304,16 +264,14 @@ const state = {
   loadError:false,
   students:[],
   entries:[],
+  denemeler:[],
   view:'login',
   currentStudentId:null,
   teacherStudentId:null,
   createdStudent:null,
   justSaved:false,
   motivationalQuote:null,
-  geminiVerdict:null,
-  geminiLoading:false,
-  targetLoadingFor:null,
-  targetAutoTried:null,
+  targetVerdict:null,
 };
 const charts = {};
 
@@ -328,6 +286,7 @@ function rangeDates(endStr, n){ const arr=[]; for(let i=n-1;i>=0;i--) arr.push(a
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function entriesFor(studentId){ return state.entries.filter(e=>e.studentId===studentId); }
+function denemelerFor(studentId){ return state.denemeler.filter(d=>d.studentId===studentId).sort((a,b)=>a.date.localeCompare(b.date)); }
 function totalOf(entry){ return Object.values(entry.subjects||{}).reduce((a,b)=>a+(Number(b)||0),0); }
 function sumForDate(studentId, dateStr){ const e = entriesFor(studentId).find(e=>e.date===dateStr); return e? totalOf(e):0; }
 function sumForRange(studentId, days){ const end=todayStr(); return rangeDates(end,days).reduce((s,d)=>s+sumForDate(studentId,d),0); }
@@ -410,14 +369,16 @@ async function loadAll(){
   try{
     const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).maybeSingle();
     if(error) throw error;
-    const payload = (data && data.data) ? data.data : { students:[], entries:[] };
+    const payload = (data && data.data) ? data.data : { students:[], entries:[], denemeler:[] };
     state.students = payload.students || [];
     state.entries = payload.entries || [];
+    state.denemeler = payload.denemeler || [];
     state.loadError = false;
   } catch(e){
     console.error('Veri yüklenemedi', e);
     state.students = [];
     state.entries = [];
+    state.denemeler = [];
     state.loadError = true;
   }
   state.loading = false;
@@ -427,16 +388,18 @@ async function withLatestData(mutator){
   try{
     const { data, error } = await _supabase.from('soru_takip').select('data').eq('id', 1).maybeSingle();
     if(error) throw error;
-    const payload = (data && data.data) ? data.data : { students:[], entries:[] };
+    const payload = (data && data.data) ? data.data : { students:[], entries:[], denemeler:[] };
     const students = payload.students || [];
     const entries = payload.entries || [];
-    const ok = mutator(students, entries);
+    const denemeler = payload.denemeler || [];
+    const ok = mutator(students, entries, denemeler);
     if(ok === false) return false;
     const { error: err2 } = await _supabase.from('soru_takip')
-      .upsert({ id: 1, data: { students, entries } }, { onConflict: 'id' });
+      .upsert({ id: 1, data: { students, entries, denemeler } }, { onConflict: 'id' });
     if(err2) throw err2;
     state.students = students;
     state.entries = entries;
+    state.denemeler = denemeler;
     state.loadError = false;
     return true;
   } catch(e){
@@ -636,7 +599,6 @@ function renderStudentCreated(){
 /* ---------------- STUDENT ENTRY ---------------- */
 let currentCounts = {};
 let saveNoteTimer = null;
-const targetFetchesInFlight = new Set();
 
 function renderStudentEntry(){
   const student = state.students.find(s=>s.id===state.currentStudentId);
@@ -652,8 +614,7 @@ function renderStudentEntry(){
   const stats = periodStats(student.id);
   const justSaved = state.justSaved;
   const motivationalQuote = state.motivationalQuote;
-  const geminiVerdict = state.geminiVerdict;
-  const geminiLoading = state.geminiLoading;
+  const targetVerdict = state.targetVerdict;
 
   let html = shellOpen();
   html += `<button class="back-link" id="back">${ICONS.back}Çıkış Yap</button>`;
@@ -677,9 +638,8 @@ function renderStudentEntry(){
       <div style="font-size:13.5px;font-weight:600;color:var(--gold);font-style:italic;">"${escapeHtml(motivationalQuote.text)}"</div>
       <div style="font-size:11.5px;font-weight:600;color:var(--gold);margin-top:4px;opacity:.8;">— ${escapeHtml(motivationalQuote.author)}</div>
     </div>` : ''}
-    ${student.dailyTarget && (geminiLoading || geminiVerdict) ? `<div style="margin-top:8px;padding:12px 14px;background:var(--grid-soft);border-radius:10px;">
-      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:4px;">Gemini Değerlendirmesi</div>
-      ${geminiLoading ? `<div style="font-size:13px;color:var(--ink-soft);">Değerlendiriliyor…</div>` : `<div style="font-size:13.5px;font-weight:600;color:var(--ink);">${escapeHtml(geminiVerdict)}</div>`}
+    ${justSaved && targetVerdict ? `<div style="margin-top:8px;padding:12px 14px;background:var(--grid-soft);border-radius:10px;text-align:center;">
+      <div style="font-size:13.5px;font-weight:600;color:var(--ink);">${escapeHtml(targetVerdict)}</div>
     </div>` : ''}
   </div>`;
 
@@ -717,6 +677,8 @@ function renderStudentEntry(){
   html += `<div class="section-title">Son 7 Gün</div>
   <div class="card"><div class="chart-wrap"><canvas id="chart-week"></canvas></div></div>`;
 
+  html += denemeSectionHtml(student);
+
   html += shellClose();
   document.getElementById('app').innerHTML = html;
 
@@ -742,28 +704,21 @@ function renderStudentEntry(){
     if(!ok) return;
     state.justSaved = true;
     state.motivationalQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random()*MOTIVATIONAL_QUOTES.length)];
-    state.geminiVerdict = null;
-    state.geminiLoading = !!student.dailyTarget;
+    state.targetVerdict = student.dailyTarget ? localTargetVerdict(student.dailyTarget, todayTotal) : null;
     render();
 
     clearTimeout(saveNoteTimer);
     saveNoteTimer = setTimeout(()=>{
-      state.justSaved=false; state.motivationalQuote=null; state.geminiVerdict=null; state.geminiLoading=false;
+      state.justSaved=false; state.motivationalQuote=null; state.targetVerdict=null;
       if(state.view==='student-entry' && state.currentStudentId===student.id){
         const n=document.getElementById('save-note'); if(n) n.innerHTML='';
       }
     }, 12000);
-
-    if(student.dailyTarget){
-      const verdict = await getGeminiVerdict(student.name, student.dailyTarget, todayTotal);
-      state.geminiVerdict = verdict || 'Bugünkü ilerlemen kaydedildi, emeğin için teşekkürler!';
-      state.geminiLoading = false;
-      if(state.view==='student-entry' && state.currentStudentId===student.id) render();
-    }
   };
 
   drawWeekChart(student.id);
   drawSubjectsChart(student);
+  wireDenemeSection(student);
 }
 
 function chartUnavailableNote(canvas){
@@ -881,13 +836,6 @@ function renderTeacherDetail(){
   const streak = calcStreak(student.id);
   const rows = entriesFor(student.id).slice().sort((a,b)=> b.date.localeCompare(a.date)).slice(0,14);
 
-  const needsAutoFetch = !student.dailyTarget && state.targetLoadingFor!==student.id && state.targetAutoTried!==student.id;
-  const targetLoading = state.targetLoadingFor===student.id || needsAutoFetch;
-  if(needsAutoFetch){
-    state.targetAutoTried = student.id;
-    state.targetLoadingFor = student.id;
-  }
-
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Tüm Öğrenciler</button>`;
   html += `<div class="top-row"><div><h2 style="font-size:24px;">${escapeHtml(student.name)}</h2><div style="margin-top:6px;">${badge}</div></div>
@@ -907,20 +855,14 @@ function renderTeacherDetail(){
   </div>`;
 
   html += `<div class="card" style="margin-bottom:20px;">
-    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Günlük Hedef <span style="font-weight:400;text-transform:none;color:var(--ink-faint);">— Gemini belirler</span></label>
-    <div id="target-card-body">`;
-  if(targetLoading){
-    html += `<div style="font-size:13px;color:var(--ink-soft);">Gemini hedef belirliyor…</div>`;
-  } else {
-    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-        <div>
-          <span class="num mono" style="font-size:18px;">${student.dailyTarget ? student.dailyTarget + ' soru' : 'Henüz belirlenmedi'}</span>
-          ${student.targetReason ? `<div style="font-size:11.5px;color:var(--ink-soft);margin-top:3px;">${escapeHtml(student.targetReason)}</div>` : ''}
-        </div>
-        <button class="btn btn-outline" id="refresh-target" style="padding:8px 14px;font-size:13px;white-space:nowrap;">Gemini'den ${student.dailyTarget ? 'Yenile' : 'Belirle'}</button>
-      </div>`;
-  }
-  html += `</div></div>`;
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Günlük Hedef</label>
+    <div id="target-card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span class="num mono" style="font-size:18px;">${student.dailyTarget ? student.dailyTarget + ' soru' : 'Belirlenmedi'}</span>
+        <button class="btn btn-outline" id="change-target" style="padding:8px 14px;font-size:13px;">Değiştir</button>
+      </div>
+    </div>
+  </div>`;
 
   const todayBreakdown = getSubjects(student).map(s=>({
     subject: s,
@@ -990,6 +932,8 @@ function renderTeacherDetail(){
   }
   html += `</div>`;
 
+  html += denemeSectionHtml(student);
+
   html += shellClose();
   document.getElementById('app').innerHTML = html;
   document.getElementById('back').onclick = ()=>{ state.view='teacher-list'; render(); };
@@ -1023,34 +967,109 @@ function renderTeacherDetail(){
     };
   };
 
-  if(!targetLoading){
-    document.getElementById('refresh-target').onclick = ()=>{
-      state.targetLoadingFor = student.id;
+  document.getElementById('change-target').onclick = ()=>{
+    const body = document.getElementById('target-card-body');
+    body.innerHTML = `
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><input type="number" min="1" id="f-new-target" value="${student.dailyTarget||''}" placeholder="Örn. 50"></div>
+      </div>
+      <button class="btn btn-red btn-block" id="save-new-target" style="margin-top:10px;">Kaydet</button>`;
+    document.getElementById('save-new-target').onclick = async ()=>{
+      const val = parseInt(document.getElementById('f-new-target').value)||0;
+      const ok = await withLatestData((students)=>{
+        const s = students.find(x=>x.id===student.id);
+        if(s) s.dailyTarget = val>0 ? val : null;
+      });
+      if(!ok) return;
       render();
     };
-  }
-  if(targetLoading && !targetFetchesInFlight.has(student.id)){
-    targetFetchesInFlight.add(student.id);
-    fetchTargetAndSave(student);
-  }
+  };
 
   drawTrendChart(student.id);
   drawSubjectsChart(student);
+  wireDenemeSection(student);
 }
 
-async function fetchTargetAndSave(student){
-  const result = await getGeminiTarget(student);
-  targetFetchesInFlight.delete(student.id);
-  state.targetLoadingFor = null;
-  if(result){
-    await withLatestData((students)=>{
-      const s = students.find(x=>x.id===student.id);
-      if(s){ s.dailyTarget = result.target; s.targetReason = result.reason; }
+function denemeSectionHtml(student){
+  const list = denemelerFor(student.id);
+  let html = `<div class="section-title">Denemeler</div>
+  <div class="card">
+    <div class="field"><label>Deneme Adı</label><input type="text" id="f-deneme-name" placeholder="Örn. 3. Deneme" autocomplete="off"></div>
+    <div style="display:flex;gap:8px;">
+      <div class="field" style="flex:1;"><label>Puan</label><input type="number" id="f-deneme-score" placeholder="Örn. 380"></div>
+      <div class="field" style="flex:1;"><label>Tarih</label><input type="date" id="f-deneme-date" value="${todayStr()}" max="${todayStr()}"></div>
+    </div>
+    <div id="deneme-error" style="color:var(--red);font-size:13px;font-weight:600;min-height:16px;margin-bottom:4px;"></div>
+    <button class="btn btn-red btn-block" id="save-deneme">Ekle</button>
+  </div>`;
+  if(list.length>0){
+    html += `<div class="card" style="margin-top:14px;">
+      <div class="chart-wrap"><canvas id="chart-deneme"></canvas></div>
+      <table class="entries" style="margin-top:18px;">
+        <thead><tr><th>Tarih</th><th>Deneme</th><th style="text-align:right;">Puan</th><th></th></tr></thead>
+        <tbody>`;
+    list.slice().reverse().forEach(d=>{
+      html += `<tr><td>${shortLabel(d.date)}</td><td>${escapeHtml(d.name)}</td><td class="n" style="text-align:right;">${d.score}</td>
+        <td style="text-align:right;"><button class="del-deneme" data-id="${d.id}" style="background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:17px;padding:2px 6px;line-height:1;">×</button></td></tr>`;
     });
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<div class="card" style="margin-top:14px;"><div class="empty"><p>Henüz deneme kaydı yok.</p></div></div>`;
   }
-  if(state.view==='teacher-detail' && state.teacherStudentId===student.id){
+  return html;
+}
+
+function wireDenemeSection(student){
+  const saveBtn = document.getElementById('save-deneme');
+  if(saveBtn) saveBtn.onclick = async ()=>{
+    const name = document.getElementById('f-deneme-name').value.trim();
+    const score = parseFloat(document.getElementById('f-deneme-score').value);
+    const date = document.getElementById('f-deneme-date').value || todayStr();
+    if(!name){ document.getElementById('deneme-error').textContent = 'Deneme adı gir.'; return; }
+    if(isNaN(score)){ document.getElementById('deneme-error').textContent = 'Bir puan gir.'; return; }
+    const record = { id:uid(), studentId:student.id, date, name, score, createdAt:Date.now() };
+    const ok = await withLatestData((students, entries, denemeler)=>{ denemeler.push(record); });
+    if(!ok) return;
     render();
-  }
+  };
+  document.querySelectorAll('.del-deneme').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Bu deneme kaydını silmek istiyor musun?')) return;
+      const id = btn.getAttribute('data-id');
+      const ok = await withLatestData((students, entries, denemeler)=>{
+        const idx = denemeler.findIndex(d=>d.id===id);
+        if(idx>=0) denemeler.splice(idx,1);
+      });
+      if(!ok) return;
+      render();
+    };
+  });
+  drawDenemeChart('chart-deneme', 'deneme', denemelerFor(student.id));
+}
+
+function drawDenemeChart(canvasId, chartKey, denemeler){
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return;
+  if(!window.Chart){ chartUnavailableNote(canvas); return; }
+  if(charts[chartKey]) charts[chartKey].destroy();
+  if(denemeler.length===0) return;
+  const labels = denemeler.map(d=>shortLabel(d.date));
+  const data = denemeler.map(d=>d.score);
+  charts[chartKey] = new Chart(canvas.getContext('2d'), {
+    type:'line',
+    data:{ labels, datasets:[{ data, borderColor:'#2F6F4F', backgroundColor:'rgba(47,111,79,.08)', fill:true, tension:.3, pointRadius:3, pointBackgroundColor:'#2F6F4F', borderWidth:2 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{
+        title:(items)=> denemeler[items[0].dataIndex] ? denemeler[items[0].dataIndex].name : '',
+        label:(c)=>`${c.parsed.y} puan`
+      }} },
+      scales:{
+        y:{ ticks:{precision:0, font:{family:'IBM Plex Mono', size:10}}, grid:{color:'#E8EDF2'} },
+        x:{ ticks:{font:{family:'Inter', size:10}, maxTicksLimit:8}, grid:{display:false} }
+      }
+    }
+  });
 }
 
 function trendRange(studentId){
