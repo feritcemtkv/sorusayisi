@@ -272,6 +272,44 @@ async function getGeminiVerdict(studentName, target, actual){
   }
 }
 
+async function getGeminiTarget(student){
+  try{
+    const recentAvg = Math.round(sumForRange(student.id,7)/7);
+    const allTime = sumAllTime(student.id);
+    const streak = calcStreak(student.id);
+    const hasHistory = entriesFor(student.id).length>0;
+    const examLabel = student.type==='LGS' ? 'LGS' : `YKS (${ALAN_LABELS[student.alan]} alanı)`;
+    const prompt = hasHistory
+      ? `Sen bir özel ders öğretmeninin, öğrencisi için günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor. Son 7 günün günlük ortalaması: ${recentAvg} soru. Bugüne kadar toplam çözdüğü: ${allTime} soru. Şu anki art arda gün serisi: ${streak}. Bu bilgilere göre, öğrenciyi hem hafifçe zorlayan hem gerçekçi bir günlük soru çözme hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`
+      : `Sen bir özel ders öğretmeninin, yeni bir öğrencisi için başlangıç günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor, henüz hiç veri girmemiş. Yeni başlayan bir öğrenci için makul bir başlangıç günlük hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`;
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'x-goog-api-key': GEMINI_API_KEY
+      },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    if(!res.ok){
+      const errText = await res.text().catch(()=> '');
+      console.error('Gemini hedef hata yanıtı', res.status, errText);
+      return null;
+    }
+    const data = await res.json();
+    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+      data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+    if(!text) return null;
+    const numMatch = text.match(/HEDEF:\s*(\d+)/i);
+    const reasonMatch = text.match(/SEBEP:\s*(.+)/i);
+    const target = numMatch ? parseInt(numMatch[1]) : null;
+    const reason = reasonMatch ? reasonMatch[1].trim() : '';
+    return (target && target>0) ? { target, reason } : null;
+  } catch(e){
+    console.error('Gemini hedef hatası', e);
+    return null;
+  }
+}
+
 function getSubjects(student){
   if(!student) return [];
   if(student.type==='LGS') return LGS_SUBJECTS.slice();
@@ -292,6 +330,8 @@ const state = {
   motivationalQuote:null,
   geminiVerdict:null,
   geminiLoading:false,
+  targetLoadingFor:null,
+  targetAutoTried:null,
 };
 const charts = {};
 
@@ -614,6 +654,7 @@ function renderStudentCreated(){
 /* ---------------- STUDENT ENTRY ---------------- */
 let currentCounts = {};
 let saveNoteTimer = null;
+const targetFetchesInFlight = new Set();
 
 function renderStudentEntry(){
   const student = state.students.find(s=>s.id===state.currentStudentId);
@@ -858,6 +899,13 @@ function renderTeacherDetail(){
   const streak = calcStreak(student.id);
   const rows = entriesFor(student.id).slice().sort((a,b)=> b.date.localeCompare(a.date)).slice(0,14);
 
+  const needsAutoFetch = !student.dailyTarget && state.targetLoadingFor!==student.id && state.targetAutoTried!==student.id;
+  const targetLoading = state.targetLoadingFor===student.id || needsAutoFetch;
+  if(needsAutoFetch){
+    state.targetAutoTried = student.id;
+    state.targetLoadingFor = student.id;
+  }
+
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Tüm Öğrenciler</button>`;
   html += `<div class="top-row"><div><h2 style="font-size:24px;">${escapeHtml(student.name)}</h2><div style="margin-top:6px;">${badge}</div></div>
@@ -877,14 +925,20 @@ function renderTeacherDetail(){
   </div>`;
 
   html += `<div class="card" style="margin-bottom:20px;">
-    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Günlük Hedef</label>
-    <div id="target-card-body">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-        <span class="num mono" style="font-size:18px;">${student.dailyTarget ? student.dailyTarget + ' soru' : 'Belirlenmedi'}</span>
-        <button class="btn btn-outline" id="change-target" style="padding:8px 14px;font-size:13px;">Değiştir</button>
-      </div>
-    </div>
-  </div>`;
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Günlük Hedef <span style="font-weight:400;text-transform:none;color:var(--ink-faint);">— Gemini belirler</span></label>
+    <div id="target-card-body">`;
+  if(targetLoading){
+    html += `<div style="font-size:13px;color:var(--ink-soft);">Gemini hedef belirliyor…</div>`;
+  } else {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div>
+          <span class="num mono" style="font-size:18px;">${student.dailyTarget ? student.dailyTarget + ' soru' : 'Henüz belirlenmedi'}</span>
+          ${student.targetReason ? `<div style="font-size:11.5px;color:var(--ink-soft);margin-top:3px;">${escapeHtml(student.targetReason)}</div>` : ''}
+        </div>
+        <button class="btn btn-outline" id="refresh-target" style="padding:8px 14px;font-size:13px;white-space:nowrap;">Gemini'den ${student.dailyTarget ? 'Yenile' : 'Belirle'}</button>
+      </div>`;
+  }
+  html += `</div></div>`;
 
   const todayBreakdown = getSubjects(student).map(s=>({
     subject: s,
@@ -987,26 +1041,34 @@ function renderTeacherDetail(){
     };
   };
 
-  document.getElementById('change-target').onclick = ()=>{
-    const body = document.getElementById('target-card-body');
-    body.innerHTML = `
-      <div style="display:flex;gap:8px;">
-        <div style="flex:1;"><input type="number" min="1" id="f-new-target" value="${student.dailyTarget||''}" placeholder="Örn. 50"></div>
-      </div>
-      <button class="btn btn-red btn-block" id="save-new-target" style="margin-top:10px;">Kaydet</button>`;
-    document.getElementById('save-new-target').onclick = async ()=>{
-      const val = parseInt(document.getElementById('f-new-target').value)||0;
-      const ok = await withLatestData((students)=>{
-        const s = students.find(x=>x.id===student.id);
-        if(s) s.dailyTarget = val>0 ? val : null;
-      });
-      if(!ok) return;
+  if(!targetLoading){
+    document.getElementById('refresh-target').onclick = ()=>{
+      state.targetLoadingFor = student.id;
       render();
     };
-  };
+  }
+  if(targetLoading && !targetFetchesInFlight.has(student.id)){
+    targetFetchesInFlight.add(student.id);
+    fetchTargetAndSave(student);
+  }
 
   drawTrendChart(student.id);
   drawSubjectsChart(student);
+}
+
+async function fetchTargetAndSave(student){
+  const result = await getGeminiTarget(student);
+  targetFetchesInFlight.delete(student.id);
+  state.targetLoadingFor = null;
+  if(result){
+    await withLatestData((students)=>{
+      const s = students.find(x=>x.id===student.id);
+      if(s){ s.dailyTarget = result.target; s.targetReason = result.reason; }
+    });
+  }
+  if(state.view==='teacher-detail' && state.teacherStudentId===student.id){
+    render();
+  }
 }
 
 function trendRange(studentId){
