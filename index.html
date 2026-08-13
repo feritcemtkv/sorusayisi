@@ -9,6 +9,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="module">
+  import { GoogleGenAI } from 'https://cdn.jsdelivr.net/npm/@google/genai/+esm';
+  window.GoogleGenAI = GoogleGenAI;
+</script>
 <style>
   :root{
     --paper:#FAFAF6;
@@ -246,25 +250,18 @@ const MOTIVATIONAL_QUOTES = [
 // Gemini API — günlük hedefe göre kısa değerlendirme yazar
 const GEMINI_API_KEY = 'AQ.Ab8RN6KfN2hue8rYIAKGKhcMhJpaPc43AaBA5lTH7uGBX_GIzQ';
 const GEMINI_MODEL = 'gemini-3.6-flash';
-async function getGeminiVerdict(studentName, target, actual){
+let _geminiClient = null;
+function getGeminiClient(){
+  if(!window.GoogleGenAI){ return null; }
+  if(!_geminiClient){ _geminiClient = new window.GoogleGenAI({ apiKey: GEMINI_API_KEY }); }
+  return _geminiClient;
+}
+async function callGemini(prompt){
   try{
-    const prompt = `Sen bir özel ders öğretmeninin öğrencisine yazdığı kısa, samimi bir Türkçe geri bildirim asistanısın. Öğrencinin adı: ${studentName}. Bugünkü hedefi: ${target} soru. Bugün çözdüğü: ${actual} soru. Bu bilgiye göre, öğrenciye doğrudan hitap eden, 1-2 cümlelik, samimi ve motive edici bir Türkçe değerlendirme yaz. Sadece değerlendirme metnini yaz; başlık, tırnak işareti veya ek açıklama ekleme.`;
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type':'application/json',
-        'x-goog-api-key': GEMINI_API_KEY
-      },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
-    if(!res.ok){
-      const errText = await res.text().catch(()=> '');
-      console.error('Gemini API hata yanıtı', res.status, errText);
-      return null;
-    }
-    const data = await res.json();
-    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
-      data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+    const ai = getGeminiClient();
+    if(!ai){ console.error('Gemini SDK henüz yüklenmedi'); return null; }
+    const response = await ai.models.generateContent({ model: GEMINI_MODEL, contents: prompt });
+    const text = response && response.text;
     return text ? text.trim() : null;
   } catch(e){
     console.error('Gemini hatası', e);
@@ -272,42 +269,27 @@ async function getGeminiVerdict(studentName, target, actual){
   }
 }
 
+async function getGeminiVerdict(studentName, target, actual){
+  const prompt = `Sen bir özel ders öğretmeninin öğrencisine yazdığı kısa, samimi bir Türkçe geri bildirim asistanısın. Öğrencinin adı: ${studentName}. Bugünkü hedefi: ${target} soru. Bugün çözdüğü: ${actual} soru. Bu bilgiye göre, öğrenciye doğrudan hitap eden, 1-2 cümlelik, samimi ve motive edici bir Türkçe değerlendirme yaz. Sadece değerlendirme metnini yaz; başlık, tırnak işareti veya ek açıklama ekleme.`;
+  return await callGemini(prompt);
+}
+
 async function getGeminiTarget(student){
-  try{
-    const recentAvg = Math.round(sumForRange(student.id,7)/7);
-    const allTime = sumAllTime(student.id);
-    const streak = calcStreak(student.id);
-    const hasHistory = entriesFor(student.id).length>0;
-    const examLabel = student.type==='LGS' ? 'LGS' : `YKS (${ALAN_LABELS[student.alan]} alanı)`;
-    const prompt = hasHistory
-      ? `Sen bir özel ders öğretmeninin, öğrencisi için günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor. Son 7 günün günlük ortalaması: ${recentAvg} soru. Bugüne kadar toplam çözdüğü: ${allTime} soru. Şu anki art arda gün serisi: ${streak}. Bu bilgilere göre, öğrenciyi hem hafifçe zorlayan hem gerçekçi bir günlük soru çözme hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`
-      : `Sen bir özel ders öğretmeninin, yeni bir öğrencisi için başlangıç günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor, henüz hiç veri girmemiş. Yeni başlayan bir öğrenci için makul bir başlangıç günlük hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`;
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type':'application/json',
-        'x-goog-api-key': GEMINI_API_KEY
-      },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
-    if(!res.ok){
-      const errText = await res.text().catch(()=> '');
-      console.error('Gemini hedef hata yanıtı', res.status, errText);
-      return null;
-    }
-    const data = await res.json();
-    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
-      data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
-    if(!text) return null;
-    const numMatch = text.match(/HEDEF:\s*(\d+)/i);
-    const reasonMatch = text.match(/SEBEP:\s*(.+)/i);
-    const target = numMatch ? parseInt(numMatch[1]) : null;
-    const reason = reasonMatch ? reasonMatch[1].trim() : '';
-    return (target && target>0) ? { target, reason } : null;
-  } catch(e){
-    console.error('Gemini hedef hatası', e);
-    return null;
-  }
+  const recentAvg = Math.round(sumForRange(student.id,7)/7);
+  const allTime = sumAllTime(student.id);
+  const streak = calcStreak(student.id);
+  const hasHistory = entriesFor(student.id).length>0;
+  const examLabel = student.type==='LGS' ? 'LGS' : `YKS (${ALAN_LABELS[student.alan]} alanı)`;
+  const prompt = hasHistory
+    ? `Sen bir özel ders öğretmeninin, öğrencisi için günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor. Son 7 günün günlük ortalaması: ${recentAvg} soru. Bugüne kadar toplam çözdüğü: ${allTime} soru. Şu anki art arda gün serisi: ${streak}. Bu bilgilere göre, öğrenciyi hem hafifçe zorlayan hem gerçekçi bir günlük soru çözme hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`
+    : `Sen bir özel ders öğretmeninin, yeni bir öğrencisi için başlangıç günlük soru çözme hedefi belirlemesine yardım eden bir asistansın. Öğrenci: ${student.name}, ${examLabel} sınavına hazırlanıyor, henüz hiç veri girmemiş. Yeni başlayan bir öğrenci için makul bir başlangıç günlük hedefi öner. Sadece şu formatta cevap ver, başka hiçbir şey ekleme:\nHEDEF: <sadece sayı>\nSEBEP: <tek cümlelik kısa Türkçe açıklama>`;
+  const text = await callGemini(prompt);
+  if(!text) return null;
+  const numMatch = text.match(/HEDEF:\s*(\d+)/i);
+  const reasonMatch = text.match(/SEBEP:\s*(.+)/i);
+  const target = numMatch ? parseInt(numMatch[1]) : null;
+  const reason = reasonMatch ? reasonMatch[1].trim() : '';
+  return (target && target>0) ? { target, reason } : null;
 }
 
 function getSubjects(student){
