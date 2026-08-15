@@ -287,6 +287,193 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':
 
 function entriesFor(studentId){ return state.entries.filter(e=>e.studentId===studentId); }
 function denemelerFor(studentId){ return state.denemeler.filter(d=>d.studentId===studentId).sort((a,b)=>a.date.localeCompare(b.date)); }
+
+async function deleteStudent(studentId, studentName){
+  if(!confirm(`${studentName} adlı öğrenciyi ve tüm kayıtlarını (sorular, denemeler) kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz.`)) return false;
+  return await withLatestData((students, entries, denemeler)=>{
+    const idx = students.findIndex(s=>s.id===studentId);
+    if(idx>=0) students.splice(idx,1);
+    for(let i=entries.length-1;i>=0;i--){ if(entries[i].studentId===studentId) entries.splice(i,1); }
+    for(let i=denemeler.length-1;i>=0;i--){ if(denemeler[i].studentId===studentId) denemeler.splice(i,1); }
+  });
+}
+
+const _scriptCache = {};
+function loadScript(src){
+  if(_scriptCache[src]) return _scriptCache[src];
+  _scriptCache[src] = new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = ()=> resolve();
+    s.onerror = ()=> { delete _scriptCache[src]; reject(new Error('Kütüphane yüklenemedi: '+src)); };
+    document.head.appendChild(s);
+  });
+  return _scriptCache[src];
+}
+
+async function exportToExcel(){
+  try{ await loadScript('https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js'); }
+  catch(e){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
+  if(!window.XLSX){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
+  const wb = XLSX.utils.book_new();
+
+  const studentRows = state.students.map(st=>({
+    'Ad Soyad': st.name,
+    'Kullanıcı Adı': st.username || '',
+    'Sınav Türü': st.type,
+    'Alan': st.alan ? ALAN_LABELS[st.alan] : '',
+    'Günlük Hedef': st.dailyTarget || '',
+    'Bugün': sumForDate(st.id, todayStr()),
+    'Bu Hafta': sumForRange(st.id, 7),
+    'Toplam': sumAllTime(st.id),
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(studentRows), 'Öğrenciler');
+
+  const questionRows = [];
+  state.entries.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+    const st = state.students.find(s=>s.id===e.studentId);
+    const name = st ? st.name : '(silinmiş öğrenci)';
+    Object.entries(e.subjects||{}).forEach(([subject,count])=>{
+      if(Number(count)>0){
+        questionRows.push({ 'Öğrenci': name, 'Tarih': e.date, 'Ders': subject.replace(' (TYT)','').replace(' (AYT)',''), 'Soru Sayısı': Number(count) });
+      }
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(questionRows), 'Günlük Sorular');
+
+  const denemeRows = state.denemeler.slice().sort((a,b)=>a.date.localeCompare(b.date)).map(d=>{
+    const st = state.students.find(s=>s.id===d.studentId);
+    return { 'Öğrenci': st ? st.name : '(silinmiş öğrenci)', 'Tarih': d.date, 'Deneme Adı': d.name, 'Puan': d.score };
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(denemeRows), 'Denemeler');
+
+  XLSX.writeFile(wb, `soru-takip-yedek-${todayStr()}.xlsx`);
+}
+
+function renderChartToImage(config, width, height){
+  return new Promise((resolve)=>{
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    canvas.style.position = 'fixed'; canvas.style.left = '-9999px'; canvas.style.top = '0';
+    document.body.appendChild(canvas);
+    if(!window.Chart){ document.body.removeChild(canvas); resolve(null); return; }
+    const chart = new Chart(canvas.getContext('2d'), Object.assign({}, config, {
+      options: Object.assign({}, config.options, { responsive:false, animation:false, devicePixelRatio:2 })
+    }));
+    requestAnimationFrame(()=>{
+      requestAnimationFrame(()=>{
+        const dataUrl = canvas.toDataURL('image/png');
+        chart.destroy();
+        document.body.removeChild(canvas);
+        resolve(dataUrl);
+      });
+    });
+  });
+}
+
+async function exportStudentToExcel(student){
+  try{ await loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js'); }
+  catch(e){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
+  if(!window.ExcelJS){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
+  if(!window.Chart){ alert('Grafik kütüphanesi yüklenemedi, internetini kontrol edip sayfayı yenile.'); return; }
+
+  const stats = periodStats(student.id);
+  const streak = calcStreak(student.id);
+  const subjects = getSubjects(student);
+  const totals = subjectTotals(student.id);
+  const grandTotal = subjects.reduce((s,sub)=>s+(totals[sub]||0),0);
+  const trendDays = trendRange(student.id);
+  const dList = denemelerFor(student.id);
+
+  const trendImg = await renderChartToImage({
+    type:'line',
+    data:{ labels: trendDays.map(shortLabel), datasets:[{ data: trendDays.map(d=>sumForDate(student.id,d)), borderColor:'#C0392B', backgroundColor:'rgba(192,57,43,.12)', fill:true, tension:.3, pointRadius:2, borderWidth:2 }] },
+    options:{ plugins:{ legend:{display:false}, title:{display:true,text:'Günlük Soru Sayısı'} }, scales:{ y:{beginAtZero:true} } }
+  }, 700, 300);
+
+  const subjectImg = await renderChartToImage({
+    type:'bar',
+    data:{ labels: subjects.map(s=>s.replace(' (TYT)','').replace(' (AYT)','')), datasets:[{ data: subjects.map(s=>totals[s]||0), backgroundColor: subjects.map((_,i)=>PALETTE[i%PALETTE.length]) }] },
+    options:{ indexAxis:'y', plugins:{ legend:{display:false}, title:{display:true,text:'Derslere Göre Toplam'} }, scales:{ x:{beginAtZero:true} } }
+  }, 700, Math.max(260, subjects.length*40));
+
+  let denemeImg = null;
+  if(dList.length>0){
+    denemeImg = await renderChartToImage({
+      type:'line',
+      data:{ labels: dList.map(d=>shortLabel(d.date)), datasets:[{ data: dList.map(d=>d.score), borderColor:'#2F6F4F', backgroundColor:'rgba(47,111,79,.12)', fill:true, tension:.3, pointRadius:3, borderWidth:2 }] },
+      options:{ plugins:{ legend:{display:false}, title:{display:true,text:'Deneme Puanları'} } }
+    }, 700, 300);
+  }
+
+  const wb = new ExcelJS.Workbook();
+
+  const wsOzet = wb.addWorksheet('Özet');
+  wsOzet.columns = [{ header:'', key:'k', width:24 }, { header:'', key:'v', width:30 }];
+  const examLabel = student.type==='LGS' ? 'LGS' : `YKS (${ALAN_LABELS[student.alan]})`;
+  [
+    ['Ad Soyad', student.name],
+    ['Sınav Türü', examLabel],
+    ['Güncel Seri', streak+' gün'],
+    ['Bugün', stats.today],
+    ['Bu Hafta', stats.thisWeek],
+    ['Geçen Hafta', stats.lastWeek],
+    ['Bu Ay', stats.thisMonth],
+    ['Geçen Ay', stats.lastMonth],
+    ['Tüm Zamanlar', stats.allTime],
+    ['Günlük Hedef', student.dailyTarget || '—'],
+  ].forEach(row=> wsOzet.addRow(row));
+  wsOzet.getColumn('k').font = { bold:true };
+
+  const wsGrafik = wb.addWorksheet('Grafikler');
+  let rowCursor = 0;
+  if(trendImg){
+    const id = wb.addImage({ base64: trendImg, extension:'png' });
+    wsGrafik.addImage(id, { tl:{col:0,row:rowCursor}, ext:{width:700,height:300} });
+    rowCursor += 16;
+  }
+  if(subjectImg){
+    const id = wb.addImage({ base64: subjectImg, extension:'png' });
+    wsGrafik.addImage(id, { tl:{col:0,row:rowCursor}, ext:{width:700,height:Math.max(260, subjects.length*40)} });
+    rowCursor += Math.ceil(Math.max(260, subjects.length*40)/19) + 2;
+  }
+  if(denemeImg){
+    const id = wb.addImage({ base64: denemeImg, extension:'png' });
+    wsGrafik.addImage(id, { tl:{col:0,row:rowCursor}, ext:{width:700,height:300} });
+  }
+
+  const wsSubjects = wb.addWorksheet('Derslere Göre');
+  wsSubjects.columns = [{ header:'Ders', key:'ders', width:24 }, { header:'Toplam', key:'toplam', width:12 }, { header:'%', key:'pct', width:10 }];
+  subjects.forEach(s=>{
+    const val = totals[s]||0;
+    const pct = grandTotal>0 ? Math.round(val/grandTotal*100) : 0;
+    wsSubjects.addRow({ ders: s.replace(' (TYT)','').replace(' (AYT)',''), toplam: val, pct: pct+'%' });
+  });
+
+  const wsDaily = wb.addWorksheet('Günlük Sorular');
+  wsDaily.columns = [{ header:'Tarih', key:'tarih', width:14 }, { header:'Ders', key:'ders', width:22 }, { header:'Soru Sayısı', key:'sayi', width:14 }];
+  entriesFor(student.id).slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+    Object.entries(e.subjects||{}).forEach(([subject,count])=>{
+      if(Number(count)>0) wsDaily.addRow({ tarih: e.date, ders: subject.replace(' (TYT)','').replace(' (AYT)',''), sayi: Number(count) });
+    });
+  });
+
+  if(dList.length>0){
+    const wsDeneme = wb.addWorksheet('Denemeler');
+    wsDeneme.columns = [{ header:'Tarih', key:'tarih', width:14 }, { header:'Deneme Adı', key:'ad', width:22 }, { header:'Puan', key:'puan', width:12 }];
+    dList.forEach(d=> wsDeneme.addRow({ tarih: d.date, ad: d.name, puan: d.score }));
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const safeName = student.name.replace(/[^a-zA-Z0-9ığüşöçİĞÜŞÖÇ ]/g,'').trim().replace(/\s+/g,'-');
+  a.href = url; a.download = `${safeName}-rapor-${todayStr()}.xlsx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function totalOf(entry){ return Object.values(entry.subjects||{}).reduce((a,b)=>a+(Number(b)||0),0); }
 function sumForDate(studentId, dateStr){ const e = entriesFor(studentId).find(e=>e.date===dateStr); return e? totalOf(e):0; }
 function sumForRange(studentId, days){ const end=todayStr(); return rangeDates(end,days).reduce((s,d)=>s+sumForDate(studentId,d),0); }
@@ -790,17 +977,27 @@ function renderTeacherPin(){
 function renderTeacherList(){
   const todayTotal = state.students.reduce((s,st)=>s+sumForDate(st.id, todayStr()),0);
   const weekTotal = state.students.reduce((s,st)=>s+sumForRange(st.id,7),0);
+  const missingToday = state.students.filter(st=> sumForDate(st.id, todayStr())===0);
 
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Ana Sayfa</button>`;
   html += `<div class="top-row"><h2 style="font-size:24px;">Öğretmen Paneli</h2>
-    <button class="btn btn-outline" id="add-student">+ Öğrenci Ekle</button></div>`;
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" id="export-excel">Excel'e Aktar</button>
+      <button class="btn btn-outline" id="add-student">+ Öğrenci Ekle</button>
+    </div></div>`;
 
   html += `<div class="stat-strip">
     <div class="stat-pill"><span class="num mono">${todayTotal}</span><span class="label">Bugün</span></div>
     <div class="stat-pill"><span class="num mono">${weekTotal}</span><span class="label">Bu Hafta</span></div>
     <div class="stat-pill"><span class="num mono">${state.students.length}</span><span class="label">Öğrenci</span></div>
   </div>`;
+
+  if(missingToday.length>0){
+    html += `<div class="card" style="border-color:var(--red);background:var(--red-soft);margin-top:16px;">
+      <p style="margin:0;font-size:13px;font-weight:700;color:var(--red);">Bugün henüz soru girmeyen ${missingToday.length} öğrenci: ${missingToday.map(s=>escapeHtml(s.name)).join(', ')}</p>
+    </div>`;
+  }
 
   html += `<div class="section-title">Öğrenciler</div><div class="card">`;
   if(state.students.length===0){
@@ -809,11 +1006,13 @@ function renderTeacherList(){
     state.students.slice().sort((a,b)=> sumForDate(b.id,todayStr()) - sumForDate(a.id,todayStr())).forEach(st=>{
       const badge = st.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[st.alan]}</span>`;
       const streak = calcStreak(st.id);
+      const todayCount = sumForDate(st.id,todayStr());
       html += `<div class="list-row" data-id="${st.id}">
         <div><div class="name">${escapeHtml(st.name)} ${streak>=2?`<span class="streak" style="margin-left:6px;">${ICONS.flame}${streak}</span>`:''}</div><div class="meta">${badge} ${st.username && st.password ? `<span class="mono">@${escapeHtml(st.username)} · ${escapeHtml(st.password)}</span>` : `<span style="color:var(--red);font-weight:700;">Giriş bilgisi eksik — düzenle</span>`}</div></div>
         <div class="right">
-          <div class="figure"><div class="n">${sumForDate(st.id,todayStr())}</div><div class="l">Bugün</div></div>
+          <div class="figure"><div class="n" style="${todayCount===0?'color:var(--red);':''}">${todayCount}</div><div class="l">Bugün</div></div>
           <div class="figure"><div class="n">${sumForRange(st.id,7)}</div><div class="l">Hafta</div></div>
+          <button class="del-student" data-id="${st.id}" data-name="${escapeHtml(st.name)}" title="Öğrenciyi Sil" style="background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:19px;padding:4px 6px;line-height:1;">×</button>
         </div>
       </div>`;
     });
@@ -823,8 +1022,16 @@ function renderTeacherList(){
   document.getElementById('app').innerHTML = html;
   document.getElementById('back').onclick = ()=>{ state.view='login'; render(); };
   document.getElementById('add-student').onclick = ()=>{ state.view='student-add'; render(); };
+  document.getElementById('export-excel').onclick = exportToExcel;
   document.querySelectorAll('.list-row[data-id]').forEach(row=>{
     row.onclick = ()=>{ state.teacherStudentId = row.getAttribute('data-id'); state.view='teacher-detail'; render(); };
+  });
+  document.querySelectorAll('.del-student').forEach(btn=>{
+    btn.onclick = async (e)=>{
+      e.stopPropagation();
+      const ok = await deleteStudent(btn.getAttribute('data-id'), btn.getAttribute('data-name'));
+      if(ok) render();
+    };
   });
 }
 
@@ -839,7 +1046,10 @@ function renderTeacherDetail(){
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Tüm Öğrenciler</button>`;
   html += `<div class="top-row"><div><h2 style="font-size:24px;">${escapeHtml(student.name)}</h2><div style="margin-top:6px;">${badge}</div></div>
-    ${streak>=2 ? `<div class="streak">${ICONS.flame}${streak} gün üst üste</div>`:''}</div>`;
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${streak>=2 ? `<div class="streak">${ICONS.flame}${streak} gün üst üste</div>`:''}
+      <button class="btn btn-outline" id="export-student-excel" style="padding:8px 14px;font-size:13px;white-space:nowrap;">Excel Raporu İndir</button>
+    </div></div>`;
 
   html += `<div class="card" style="margin-bottom:20px;">
     <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Giriş Bilgileri</label>
@@ -934,9 +1144,27 @@ function renderTeacherDetail(){
 
   html += denemeSectionHtml(student);
 
+  html += `<div style="text-align:center;margin-top:24px;">
+    <button id="delete-student" style="background:none;border:none;color:var(--red);font-size:13px;font-weight:600;cursor:pointer;padding:8px;">Öğrenciyi Sil</button>
+  </div>`;
+
   html += shellClose();
   document.getElementById('app').innerHTML = html;
   document.getElementById('back').onclick = ()=>{ state.view='teacher-list'; render(); };
+  document.getElementById('export-student-excel').onclick = async (e)=>{
+    const btn = e.currentTarget;
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Hazırlanıyor…';
+    try{
+      await exportStudentToExcel(student);
+    } finally {
+      btn.disabled = false; btn.textContent = original;
+    }
+  };
+  document.getElementById('delete-student').onclick = async ()=>{
+    const ok = await deleteStudent(student.id, student.name);
+    if(ok){ state.teacherStudentId = null; state.view='teacher-list'; render(); }
+  };
   document.getElementById('change-pw').onclick = ()=>{
     const body = document.getElementById('pw-card-body');
     body.innerHTML = `
