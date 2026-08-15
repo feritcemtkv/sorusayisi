@@ -216,7 +216,11 @@ const ALAN_LABELS = {sayisal:'Sayısal', esit_agirlik:'Eşit Ağırlık', sozel:
 const MONTHS = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
 const PALETTE = ['#C0392B','#2F6F4F','#C6941C','#68727C','#8B5E9B','#2E6B8F','#B0563E','#4E7D3B'];
 // Öğretmen PIN kodu — istersen bunu değiştir (sadece rakam/karakter olabilir)
-const TEACHER_PIN = '2026';
+// Öğretmenler — her birinin kendi PIN'i var, sadece kendi eklediği öğrencileri görür
+const TEACHERS = [
+  { id:'ogretmen1', name:'Öğretmen 1', pin:'2026' },
+  { id:'ogretmen2', name:'Öğretmen 2', pin:'5183' },
+];
 const REMEMBER_KEY = 'soru_takip_student_id';
 function getRemembered(){ try{ return localStorage.getItem(REMEMBER_KEY); } catch(e){ return null; } }
 function setRemembered(id){ try{ localStorage.setItem(REMEMBER_KEY, id); } catch(e){} }
@@ -268,6 +272,7 @@ const state = {
   view:'login',
   currentStudentId:null,
   teacherStudentId:null,
+  currentTeacherId:null,
   createdStudent:null,
   justSaved:false,
   motivationalQuote:null,
@@ -287,6 +292,8 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':
 
 function entriesFor(studentId){ return state.entries.filter(e=>e.studentId===studentId); }
 function denemelerFor(studentId){ return state.denemeler.filter(d=>d.studentId===studentId).sort((a,b)=>a.date.localeCompare(b.date)); }
+function ownerOf(student){ return student.teacherId || TEACHERS[0].id; }
+function myStudents(){ return state.students.filter(st=> ownerOf(st)===state.currentTeacherId); }
 
 async function deleteStudent(studentId, studentName){
   if(!confirm(`${studentName} adlı öğrenciyi ve tüm kayıtlarını (sorular, denemeler) kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz.`)) return false;
@@ -316,8 +323,10 @@ async function exportToExcel(){
   catch(e){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
   if(!window.XLSX){ alert('Excel kütüphanesi yüklenemedi, internetini kontrol edip tekrar dene.'); return; }
   const wb = XLSX.utils.book_new();
+  const myList = myStudents();
+  const myIds = new Set(myList.map(s=>s.id));
 
-  const studentRows = state.students.map(st=>({
+  const studentRows = myList.map(st=>({
     'Ad Soyad': st.name,
     'Kullanıcı Adı': st.username || '',
     'Sınav Türü': st.type,
@@ -330,7 +339,7 @@ async function exportToExcel(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(studentRows), 'Öğrenciler');
 
   const questionRows = [];
-  state.entries.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+  state.entries.filter(e=>myIds.has(e.studentId)).slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
     const st = state.students.find(s=>s.id===e.studentId);
     const name = st ? st.name : '(silinmiş öğrenci)';
     Object.entries(e.subjects||{}).forEach(([subject,count])=>{
@@ -341,7 +350,7 @@ async function exportToExcel(){
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(questionRows), 'Günlük Sorular');
 
-  const denemeRows = state.denemeler.slice().sort((a,b)=>a.date.localeCompare(b.date)).map(d=>{
+  const denemeRows = state.denemeler.filter(d=>myIds.has(d.studentId)).slice().sort((a,b)=>a.date.localeCompare(b.date)).map(d=>{
     const st = state.students.find(s=>s.id===d.studentId);
     return { 'Öğrenci': st ? st.name : '(silinmiş öğrenci)', 'Tarih': d.date, 'Deneme Adı': d.name, 'Puan': d.score };
   });
@@ -742,7 +751,7 @@ function renderStudentAdd(){
     if(!name){ document.getElementById('f-name').focus(); return; }
     if(!username){ document.getElementById('add-error').textContent = 'Bir kullanıcı adı belirle.'; document.getElementById('f-username').focus(); return; }
     if(!password){ document.getElementById('add-error').textContent = 'Öğrenci için bir şifre belirle.'; document.getElementById('f-password').focus(); return; }
-    const student = { id:uid(), name, username, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, password, createdAt: Date.now() };
+    const student = { id:uid(), name, username, type:chosenType, alan: chosenType==='YKS'? chosenAlan : null, password, teacherId: state.currentTeacherId, createdAt: Date.now() };
     let duplicate = false;
     const ok = await withLatestData((students)=>{
       if(students.some(s=>(s.username||'').toLowerCase()===username.toLowerCase())){ duplicate = true; return false; }
@@ -959,7 +968,9 @@ function renderTeacherPin(){
   document.getElementById('back').onclick = ()=>{ clearHash(); state.view='login'; render(); };
   const submit = ()=>{
     const val = document.getElementById('f-pin').value.trim();
-    if(val === TEACHER_PIN){
+    const teacher = TEACHERS.find(t=>t.pin===val);
+    if(teacher){
+      state.currentTeacherId = teacher.id;
       clearHash();
       state.view='teacher-list'; render();
     } else {
@@ -975,13 +986,15 @@ function renderTeacherPin(){
 
 /* ---------------- TEACHER LIST ---------------- */
 function renderTeacherList(){
-  const todayTotal = state.students.reduce((s,st)=>s+sumForDate(st.id, todayStr()),0);
-  const weekTotal = state.students.reduce((s,st)=>s+sumForRange(st.id,7),0);
-  const missingToday = state.students.filter(st=> sumForDate(st.id, todayStr())===0);
+  const myList = myStudents();
+  const teacher = TEACHERS.find(t=>t.id===state.currentTeacherId);
+  const todayTotal = myList.reduce((s,st)=>s+sumForDate(st.id, todayStr()),0);
+  const weekTotal = myList.reduce((s,st)=>s+sumForRange(st.id,7),0);
+  const missingToday = myList.filter(st=> sumForDate(st.id, todayStr())===0);
 
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Ana Sayfa</button>`;
-  html += `<div class="top-row"><h2 style="font-size:24px;">Öğretmen Paneli</h2>
+  html += `<div class="top-row"><div><h2 style="font-size:24px;">Öğretmen Paneli</h2>${teacher?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;">${escapeHtml(teacher.name)}</div>`:''}</div>
     <div style="display:flex;gap:8px;">
       <button class="btn btn-outline" id="export-excel">Excel'e Aktar</button>
       <button class="btn btn-outline" id="add-student">+ Öğrenci Ekle</button>
@@ -990,7 +1003,7 @@ function renderTeacherList(){
   html += `<div class="stat-strip">
     <div class="stat-pill"><span class="num mono">${todayTotal}</span><span class="label">Bugün</span></div>
     <div class="stat-pill"><span class="num mono">${weekTotal}</span><span class="label">Bu Hafta</span></div>
-    <div class="stat-pill"><span class="num mono">${state.students.length}</span><span class="label">Öğrenci</span></div>
+    <div class="stat-pill"><span class="num mono">${myList.length}</span><span class="label">Öğrenci</span></div>
   </div>`;
 
   if(missingToday.length>0){
@@ -1000,10 +1013,10 @@ function renderTeacherList(){
   }
 
   html += `<div class="section-title">Öğrenciler</div><div class="card">`;
-  if(state.students.length===0){
+  if(myList.length===0){
     html += `<div class="empty"><p>Henüz öğrenci eklenmedi.</p></div>`;
   } else {
-    state.students.slice().sort((a,b)=> sumForDate(b.id,todayStr()) - sumForDate(a.id,todayStr())).forEach(st=>{
+    myList.slice().sort((a,b)=> sumForDate(b.id,todayStr()) - sumForDate(a.id,todayStr())).forEach(st=>{
       const badge = st.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[st.alan]}</span>`;
       const streak = calcStreak(st.id);
       const todayCount = sumForDate(st.id,todayStr());
@@ -1038,7 +1051,7 @@ function renderTeacherList(){
 /* ---------------- TEACHER DETAIL ---------------- */
 function renderTeacherDetail(){
   const student = state.students.find(s=>s.id===state.teacherStudentId);
-  if(!student){ state.view='teacher-list'; return render(); }
+  if(!student || ownerOf(student)!==state.currentTeacherId){ state.view='teacher-list'; return render(); }
   const badge = student.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[student.alan]}</span>`;
   const streak = calcStreak(student.id);
   const rows = entriesFor(student.id).slice().sort((a,b)=> b.date.localeCompare(a.date)).slice(0,14);
