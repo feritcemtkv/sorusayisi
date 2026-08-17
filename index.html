@@ -879,7 +879,10 @@ function renderStudentEntry(){
   html += shellClose();
   document.getElementById('app').innerHTML = html;
 
-  document.getElementById('back').onclick = ()=>{ clearRemembered(); state.currentStudentId=null; state.view='login'; render(); };
+  document.getElementById('back').onclick = ()=>{
+    if(!confirm('Çıkış yapmak istediğine emin misin? Tekrar girmek için kullanıcı adı ve şifreni gireceksin.')) return;
+    clearRemembered(); state.currentStudentId=null; state.view='login'; render();
+  };
 
   document.querySelectorAll('.num-input').forEach(inp=>{
     inp.addEventListener('input', ()=>{
