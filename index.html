@@ -796,6 +796,16 @@ function renderStudentCreated(){
 /* ---------------- STUDENT ENTRY ---------------- */
 let currentCounts = {};
 let saveNoteTimer = null;
+let teacherEntryDate = todayStr();
+let teacherEntryCounts = {};
+let teacherEntryStudentId = null;
+function computeTeacherEntryCounts(student, date){
+  const subjects = getSubjects(student);
+  const existing = entriesFor(student.id).find(e=>e.date===date);
+  const counts = {};
+  subjects.forEach(s=> counts[s] = existing && existing.subjects[s] ? Number(existing.subjects[s]) : 0);
+  return counts;
+}
 
 function renderStudentEntry(){
   const student = state.students.find(s=>s.id===state.currentStudentId);
@@ -1059,6 +1069,13 @@ function renderTeacherDetail(){
   const badge = student.type==='LGS' ? `<span class="badge badge-lgs">LGS</span>` : `<span class="badge badge-yks">YKS · ${ALAN_LABELS[student.alan]}</span>`;
   const streak = calcStreak(student.id);
   const rows = entriesFor(student.id).slice().sort((a,b)=> b.date.localeCompare(a.date)).slice(0,14);
+  const lastEntry = rows[0];
+
+  if(teacherEntryStudentId !== student.id){
+    teacherEntryStudentId = student.id;
+    teacherEntryDate = todayStr();
+  }
+  teacherEntryCounts = computeTeacherEntryCounts(student, teacherEntryDate);
 
   let html = shellOpen({wide:true});
   html += `<button class="back-link" id="back">${ICONS.back}Tüm Öğrenciler</button>`;
@@ -1067,6 +1084,10 @@ function renderTeacherDetail(){
       ${streak>=2 ? `<div class="streak">${ICONS.flame}${streak} gün üst üste</div>`:''}
       <button class="btn btn-outline" id="export-student-excel" style="padding:8px 14px;font-size:13px;white-space:nowrap;">Excel Raporu İndir</button>
     </div></div>`;
+
+  html += `<div style="margin:-4px 0 16px;font-size:13px;color:var(--ink-soft);">
+    Son Giriş: ${lastEntry ? `<strong style="color:var(--ink);">${longLabel(lastEntry.date)}</strong> · ${totalOf(lastEntry)} soru` : `<strong style="color:var(--red);">Henüz hiç giriş yok</strong>`}
+  </div>`;
 
   html += `<div class="card" style="margin-bottom:20px;">
     <label style="display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Giriş Bilgileri</label>
@@ -1145,6 +1166,22 @@ function renderTeacherDetail(){
     html += `</tbody></table>`;
   }
   html += `</div>`;
+
+  const teacherSubjects = getSubjects(student);
+  html += `<div class="section-title">Geçmişe Soru Ekle</div>
+  <div class="card">
+    <div class="field"><label>Tarih</label><input type="date" id="f-teacher-entry-date" value="${teacherEntryDate}" max="${todayStr()}"></div>`;
+  teacherSubjects.forEach(s=>{
+    const group = s.includes('(AYT)') ? 'AYT' : (s.includes('(TYT)') ? 'TYT' : '');
+    html += `<div class="subject-row">
+      <span class="sname">${escapeHtml(s.replace(' (TYT)','').replace(' (AYT)',''))}${group?`<span class="chip">${group}</span>`:''}</span>
+      <input type="number" min="0" inputmode="numeric" class="teacher-num-input" data-subject="${escapeHtml(s)}" value="${teacherEntryCounts[s]||''}" placeholder="0">
+    </div>`;
+  });
+  html += `<div class="total-box"><span class="label">Toplam</span><span class="num mono" id="teacher-entry-total">${Object.values(teacherEntryCounts).reduce((a,b)=>a+b,0)}</span></div>
+    <button class="btn btn-red btn-block" id="save-teacher-entry" style="margin-top:16px;">Kaydet</button>
+    <div class="save-note" id="teacher-entry-note"></div>
+  </div>`;
 
   html += `<div class="section-title">Son Girişler</div>
   <div class="card">`;
@@ -1228,6 +1265,36 @@ function renderTeacherDetail(){
       if(!ok) return;
       render();
     };
+  };
+
+  document.getElementById('f-teacher-entry-date').addEventListener('change', (e)=>{
+    teacherEntryDate = e.target.value || todayStr();
+    render();
+  });
+  document.querySelectorAll('.teacher-num-input').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const subj = inp.getAttribute('data-subject');
+      teacherEntryCounts[subj] = Math.max(0, parseInt(inp.value)||0);
+      const total = Object.values(teacherEntryCounts).reduce((a,b)=>a+b,0);
+      document.getElementById('teacher-entry-total').textContent = total;
+    });
+  });
+  document.getElementById('save-teacher-entry').onclick = async ()=>{
+    const dateToSave = teacherEntryDate;
+    const countsToSave = {...teacherEntryCounts};
+    const entryId = uid();
+    const ok = await withLatestData((students, entries)=>{
+      const idx = entries.findIndex(e=>e.studentId===student.id && e.date===dateToSave);
+      const payload = { id: idx>=0? entries[idx].id : entryId, studentId: student.id, date: dateToSave, subjects: countsToSave, savedAt: Date.now() };
+      if(idx>=0) entries[idx] = payload; else entries.push(payload);
+    });
+    if(!ok) return;
+    render();
+    const note = document.getElementById('teacher-entry-note');
+    if(note){
+      note.innerHTML = `${ICONS.check}Kaydedildi`;
+      setTimeout(()=>{ const n=document.getElementById('teacher-entry-note'); if(n) n.innerHTML=''; }, 3000);
+    }
   };
 
   drawTrendChart(student.id);
